@@ -18,17 +18,72 @@ const PROJECTILE_SPEED = 10;
 const CANVAS_WIDTH = 2000;
 const CANVAS_HEIGHT = 2000;
 
-// Simple walls for testing
-const walls = [
-  { x: 500, y: 500, w: 200, h: 50 },
-  { x: 800, y: 300, w: 50, h: 400 },
-  { x: 1200, y: 800, w: 300, h: 50 },
-  { x: 200, y: 1200, w: 50, h: 500 },
-  { x: 1500, y: 200, w: 200, h: 200 } // Big box
+// Building layout - floors define areas with different tiles
+const floors = [
+  // Main living room (wooden floor)
+  { x: 600, y: 400, w: 500, h: 400, tile: 'wood' },
+  // Kitchen area (wooden floor)
+  { x: 600, y: 800, w: 300, h: 200, tile: 'wood' },
+  // Bathroom (tiled floor)
+  { x: 1100, y: 400, w: 200, h: 200, tile: 'bathroom' },
+  // Hallway
+  { x: 900, y: 800, w: 200, h: 200, tile: 'wood' }
+];
+
+// Decorations (non-collision furniture, plants, etc.)
+const decorations = [
+  // Living room furniture
+  { x: 620, y: 420, w: 64, h: 128, tile: 'couch_green_left' },
+  { x: 684, y: 420, w: 64, h: 128, tile: 'couch_green_right' },
+  { x: 800, y: 550, w: 64, h: 64, tile: 'table_round' },
+  { x: 980, y: 720, w: 64, h: 64, tile: 'rug' },
+
+  // Bathroom fixtures
+  { x: 1150, y: 450, w: 64, h: 64, tile: 'plant' },
+
+  // Kitchen area
+  { x: 620, y: 850, w: 64, h: 64, tile: 'table_round' },
+  { x: 700, y: 840, w: 128, h: 64, tile: 'couch_teal' },
+
+  // Outdoor plants (on grass)
+  { x: 400, y: 300, w: 64, h: 64, tile: 'bush' },
+  { x: 450, y: 350, w: 64, h: 64, tile: 'bush' },
+  { x: 1400, y: 500, w: 64, h: 64, tile: 'bush' },
+  { x: 1450, y: 600, w: 64, h: 64, tile: 'bush' },
+  { x: 300, y: 900, w: 64, h: 64, tile: 'bush' },
+
+  // Some crates outside
+  { x: 1500, y: 300, w: 64, h: 64, tile: 'crate' },
+  { x: 1564, y: 300, w: 64, h: 64, tile: 'crate' }
+];
+
+// Building walls (collision + visual)
+const buildingWalls = [
+  // Outer walls - Main room
+  { x: 580, y: 380, w: 540, h: 20 }, // Top
+  { x: 580, y: 380, w: 20, h: 440 }, // Left
+  { x: 580, y: 800, w: 240, h: 20 }, // Bottom-left section
+  { x: 880, y: 800, w: 240, h: 20 }, // Bottom-right section (gap for door)
+
+  // Right side with bathroom
+  { x: 1100, y: 380, w: 220, h: 20 }, // Top of bathroom
+  { x: 1300, y: 380, w: 20, h: 240 }, // Right of bathroom
+  { x: 1100, y: 600, w: 220, h: 20 }, // Bottom of bathroom
+
+  // Connect main room to bathroom
+  { x: 1100, y: 400, w: 20, h: 100 }, // Top divider
+  { x: 1100, y: 550, w: 20, h: 70 }, // Bottom divider (gap for door)
+
+  // Kitchen extension
+  { x: 580, y: 820, w: 20, h: 200 }, // Left wall
+  { x: 580, y: 1000, w: 340, h: 20 }, // Bottom wall
+  { x: 900, y: 820, w: 20, h: 100 }, // Right divider
+  { x: 1080, y: 820, w: 20, h: 200 }, // Far right
+  { x: 900, y: 1000, w: 200, h: 20 } // Bottom right
 ];
 
 function checkWallCollision(x, y, radius) {
-  for (const wall of walls) {
+  for (const wall of buildingWalls) {
     // Simple AABB collision detection (Circle vs Rectangle approximation)
     // Treats player as a square of size radius*2 for simplicity or does circle-rect
 
@@ -50,7 +105,7 @@ io.on('connection', (socket) => {
   console.log('a user connected: ' + socket.id);
 
   // Send map data
-  socket.emit('mapData', walls);
+  socket.emit('mapData', { floors, walls: buildingWalls, decorations });
 
   let startX, startY;
   // Try to find a spawn point not in a wall
@@ -156,7 +211,7 @@ setInterval(() => {
 
     // Wall Collision for Projectiles
     let hitWall = false;
-    for (const wall of walls) {
+    for (const wall of buildingWalls) {
       if (p.x >= wall.x && p.x <= wall.x + wall.w &&
         p.y >= wall.y && p.y <= wall.y + wall.h) {
         hitWall = true;

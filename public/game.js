@@ -59,17 +59,51 @@ restartBtn.addEventListener('click', () => {
 let players = {};
 let projectiles = [];
 let walls = [];
+let floors = [];
 let flashOpacity = 0;
 
 // Assets
 const playerImg = new Image();
 playerImg.src = 'kenney_top-down-shooter/PNG/Hitman 1/hitman1_gun.png';
 
+const grassImg = new Image();
+grassImg.src = 'kenney_top-down-shooter/PNG/Tiles/tile_01.png';
+
+const woodFloorImg = new Image();
+woodFloorImg.src = 'kenney_top-down-shooter/PNG/Tiles/tile_46.png';
+
+const bathroomFloorImg = new Image();
+bathroomFloorImg.src = 'kenney_top-down-shooter/PNG/Tiles/tile_496.png'; // Light blue/teal tile
+
 const wallImg = new Image();
-wallImg.src = 'kenney_top-down-shooter/PNG/Tiles/tile_129.png'; // Looks like a crate/box
+wallImg.src = 'kenney_top-down-shooter/PNG/Tiles/tile_109.png';
+
+// Decoration tiles
+const decorationTiles = {
+    couch_green_left: new Image(),
+    couch_green_right: new Image(),
+    couch_teal: new Image(),
+    table_round: new Image(),
+    rug: new Image(),
+    plant: new Image(),
+    bush: new Image(),
+    crate: new Image()
+};
+decorationTiles.couch_green_left.src = 'kenney_top-down-shooter/PNG/Tiles/tile_181.png';
+decorationTiles.couch_green_right.src = 'kenney_top-down-shooter/PNG/Tiles/tile_182.png';
+decorationTiles.couch_teal.src = 'kenney_top-down-shooter/PNG/Tiles/tile_131.png';
+decorationTiles.table_round.src = 'kenney_top-down-shooter/PNG/Tiles/tile_132.png';
+decorationTiles.rug.src = 'kenney_top-down-shooter/PNG/Tiles/tile_156.png';
+decorationTiles.plant.src = 'kenney_top-down-shooter/PNG/Tiles/tile_183.png';
+decorationTiles.bush.src = 'kenney_top-down-shooter/PNG/Tiles/tile_183.png';
+decorationTiles.crate.src = 'kenney_top-down-shooter/PNG/Tiles/tile_129.png';
+
+let decorations = [];
 
 socket.on('mapData', (data) => {
-    walls = data;
+    walls = data.walls || [];
+    floors = data.floors || [];
+    decorations = data.decorations || [];
 });
 
 socket.on('stateUpdate', (state) => {
@@ -170,32 +204,66 @@ function draw() {
         ctx.translate(camX, camY);
     }
 
-    // Draw Grid (Optional, for reference)
-    ctx.strokeStyle = '#333';
-    ctx.lineWidth = 1;
-    for (let x = 0; x <= 2000; x += 100) {
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, 2000);
-        ctx.stroke();
+    // Draw Grass Background (tiled)
+    const TILE_SIZE = 64; // Kenney tiles are typically 64x64
+    if (grassImg.complete) {
+        for (let x = 0; x < 2000; x += TILE_SIZE) {
+            for (let y = 0; y < 2000; y += TILE_SIZE) {
+                ctx.drawImage(grassImg, x, y, TILE_SIZE, TILE_SIZE);
+            }
+        }
+    } else {
+        ctx.fillStyle = '#4a9'; // Fallback green
+        ctx.fillRect(0, 0, 2000, 2000);
     }
-    for (let y = 0; y <= 2000; y += 100) {
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(2000, y);
-        ctx.stroke();
+
+    // Draw Floors (on top of grass)
+    for (const floor of floors) {
+        let floorImg;
+        if (floor.tile === 'wood') {
+            floorImg = woodFloorImg;
+        } else if (floor.tile === 'bathroom') {
+            floorImg = bathroomFloorImg;
+        }
+
+        if (floorImg && floorImg.complete) {
+            // Tile the floor image
+            for (let x = floor.x; x < floor.x + floor.w; x += TILE_SIZE) {
+                for (let y = floor.y; y < floor.y + floor.h; y += TILE_SIZE) {
+                    const drawW = Math.min(TILE_SIZE, floor.x + floor.w - x);
+                    const drawH = Math.min(TILE_SIZE, floor.y + floor.h - y);
+                    ctx.drawImage(floorImg, 0, 0, drawW, drawH, x, y, drawW, drawH);
+                }
+            }
+        } else {
+            // Fallback color
+            ctx.fillStyle = floor.tile === 'bathroom' ? '#8BA9A5' : '#c89f65';
+            ctx.fillRect(floor.x, floor.y, floor.w, floor.h);
+        }
     }
 
     // Draw Walls
     for (const wall of walls) {
-        // Draw tiled wall image
-        // For simplicity, just stretch it for now, or tile it if we want to be fancy.
-        // Stretching is easier for instant results.
         if (wallImg.complete) {
-            ctx.drawImage(wallImg, wall.x, wall.y, wall.w, wall.h);
+            // Tile wall image along wall segments
+            for (let x = wall.x; x < wall.x + wall.w; x += TILE_SIZE) {
+                for (let y = wall.y; y < wall.y + wall.h; y += TILE_SIZE) {
+                    const drawW = Math.min(TILE_SIZE, wall.x + wall.w - x);
+                    const drawH = Math.min(TILE_SIZE, wall.y + wall.h - y);
+                    ctx.drawImage(wallImg, x, y, drawW, drawH);
+                }
+            }
         } else {
-            ctx.fillStyle = '#7f8c8d';
+            ctx.fillStyle = '#333';
             ctx.fillRect(wall.x, wall.y, wall.w, wall.h);
+        }
+    }
+
+    // Draw Decorations
+    for (const deco of decorations) {
+        const img = decorationTiles[deco.tile];
+        if (img && img.complete) {
+            ctx.drawImage(img, deco.x, deco.y, deco.w, deco.h);
         }
     }
 
