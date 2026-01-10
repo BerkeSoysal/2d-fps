@@ -178,6 +178,8 @@ setInterval(() => {
 
         if (dist < 20) { // Assume player radius is 20
           player.hp -= 10;
+          io.to(id).emit('hurt'); // Notify victim
+          io.to(p.ownerId).emit('hit'); // Notify attacker
           projectiles.splice(i, 1);
           if (player.hp <= 0) {
             // Handle death if needed, for now just 0 hp

@@ -59,6 +59,14 @@ restartBtn.addEventListener('click', () => {
 let players = {};
 let projectiles = [];
 let walls = [];
+let flashOpacity = 0;
+
+// Assets
+const playerImg = new Image();
+playerImg.src = 'kenney_top-down-shooter/PNG/Hitman 1/hitman1_gun.png';
+
+const wallImg = new Image();
+wallImg.src = 'kenney_top-down-shooter/PNG/Tiles/tile_129.png'; // Looks like a crate/box
 
 socket.on('mapData', (data) => {
     walls = data;
@@ -67,6 +75,50 @@ socket.on('mapData', (data) => {
 socket.on('stateUpdate', (state) => {
     players = state.players;
     projectiles = state.projectiles;
+});
+
+// Audio System
+const AudioContext = window.AudioContext || window.webkitAudioContext;
+const audioCtx = new AudioContext();
+
+function playSound(type) {
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+    }
+    const osc = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+
+    osc.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+
+    if (type === 'hit') {
+        // High pitched "link"
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(800, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(1200, audioCtx.currentTime + 0.1);
+        gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.1);
+    } else if (type === 'hurt') {
+        // Low pitched "grunt"
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(50, audioCtx.currentTime + 0.3);
+        gainNode.gain.setValueAtTime(0.2, audioCtx.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.3);
+    }
+}
+
+socket.on('hurt', () => {
+    flashOpacity = 0.6;
+    playSound('hurt');
+});
+
+socket.on('hit', () => {
+    playSound('hit');
 });
 
 function update() {
@@ -135,13 +187,16 @@ function draw() {
     }
 
     // Draw Walls
-    ctx.fillStyle = '#7f8c8d';
     for (const wall of walls) {
-        ctx.fillRect(wall.x, wall.y, wall.w, wall.h);
-        // Optional: Add border
-        ctx.strokeStyle = '#95a5a6';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(wall.x, wall.y, wall.w, wall.h);
+        // Draw tiled wall image
+        // For simplicity, just stretch it for now, or tile it if we want to be fancy.
+        // Stretching is easier for instant results.
+        if (wallImg.complete) {
+            ctx.drawImage(wallImg, wall.x, wall.y, wall.w, wall.h);
+        } else {
+            ctx.fillStyle = '#7f8c8d';
+            ctx.fillRect(wall.x, wall.y, wall.w, wall.h);
+        }
     }
 
     // Draw Players
@@ -153,20 +208,12 @@ function draw() {
         ctx.translate(p.x, p.y);
         ctx.rotate(p.angle);
 
-        // Draw Circle (Body)
-        ctx.fillStyle = id === myId ? '#00a8ff' : '#e056fd'; // Blue for me, Purple for others
-        ctx.beginPath();
-        ctx.arc(0, 0, 20, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Draw Triangle (Pointer)
-        ctx.fillStyle = '#f1c40f'; // Yellow pointer
-        ctx.beginPath();
-        ctx.moveTo(20, 0); // Tip matches radius
-        ctx.lineTo(35, 0); // Stick out
-        ctx.lineTo(20, 5);
-        ctx.lineTo(20, -5);
-        ctx.fill();
+        // Draw Player Sprite
+        // Image is likely facing right or up, adjust rotation if needed. 
+        // Hitman 1 sprite faces right by default.
+        // Size: let's draw it approx 40x40 to match our previous circle radius
+        // The sprite might be bigger, so we verify load or just draw with width/height
+        ctx.drawImage(playerImg, -25, -20, 50, 40); // Centered approx
 
         ctx.restore();
 
@@ -186,6 +233,14 @@ function draw() {
     }
 
     ctx.restore();
+
+    // Damage Flash Effect
+    if (flashOpacity > 0) {
+        ctx.fillStyle = `rgba(255, 0, 0, ${flashOpacity})`;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        flashOpacity -= 0.05; // Fade out speed
+        if (flashOpacity < 0) flashOpacity = 0;
+    }
 
     if (myPlayer && myPlayer.hp <= 0) {
         ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
