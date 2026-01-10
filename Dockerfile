@@ -13,6 +13,9 @@ RUN npm ci --only=production
 # Copy the rest of the application
 COPY . .
 
+# Ensure public folder has correct permissions
+RUN chown -R node:node /usr/src/app
+
 # Fly.io uses PORT env variable
 ENV PORT=8080
 EXPOSE 8080
