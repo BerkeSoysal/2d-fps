@@ -10,6 +10,34 @@ window.addEventListener('resize', () => {
     canvas.height = window.innerHeight;
 });
 
+// Name Modal Handling
+const nameModal = document.getElementById('nameModal');
+const nameInput = document.getElementById('nameInput');
+const joinBtn = document.getElementById('joinBtn');
+const playerCountDisplay = document.getElementById('playerCount');
+
+let myName = '';
+let gameJoined = false;
+
+joinBtn.addEventListener('click', () => {
+    const name = nameInput.value.trim() || 'Player';
+    myName = name;
+    socket.emit('setName', name);
+    nameModal.style.display = 'none';
+    gameJoined = true;
+});
+
+nameInput.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') {
+        joinBtn.click();
+    }
+});
+
+// Player count update
+socket.on('playerCount', (count) => {
+    playerCountDisplay.textContent = `Players: ${count}`;
+});
+
 const keys = {
     w: false,
     a: false,
@@ -24,6 +52,7 @@ const mouse = {
 
 // Input Handling
 window.addEventListener('keydown', (e) => {
+    if (!gameJoined) return;
     if (e.key === 'w') keys.w = true;
     if (e.key === 'a') keys.a = true;
     if (e.key === 's') keys.s = true;
@@ -43,8 +72,9 @@ window.addEventListener('mousemove', (e) => {
 });
 
 window.addEventListener('mousedown', (e) => {
+    if (!gameJoined) return;
     // Only shoot if we are not clicking the restart button
-    if (e.target.id !== 'restartBtn') {
+    if (e.target.id !== 'restartBtn' && e.target.id !== 'joinBtn') {
         socket.emit('shoot');
     }
 });
@@ -284,6 +314,12 @@ function draw() {
         ctx.drawImage(playerImg, -25, -20, 50, 40); // Centered approx
 
         ctx.restore();
+
+        // Player Name
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 12px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText(p.name || 'Player', p.x, p.y - 45);
 
         // HP Bar
         ctx.fillStyle = 'red';

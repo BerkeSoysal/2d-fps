@@ -116,28 +116,34 @@ io.on('connection', (socket) => {
   // Send map data
   socket.emit('mapData', { floors, walls: buildingWalls, decorations });
 
-  let startX, startY;
-  // Try to find a spawn point not in a wall
-  let attempts = 0;
-  do {
-    startX = Math.random() * CANVAS_WIDTH;
-    startY = Math.random() * CANVAS_HEIGHT;
-    attempts++;
-  } while (checkWallCollision(startX, startY, 20) && attempts < 100);
+  // Wait for player to set their name before spawning
+  socket.on('setName', (name) => {
+    let startX, startY;
+    // Try to find a spawn point not in a wall
+    let attempts = 0;
+    do {
+      startX = Math.random() * CANVAS_WIDTH;
+      startY = Math.random() * CANVAS_HEIGHT;
+      attempts++;
+    } while (checkWallCollision(startX, startY, 20) && attempts < 100);
 
-  players[socket.id] = {
-    x: startX,
-    y: startY,
-    angle: 0,
-    hp: 100,
-    playerId: socket.id
-  };
+    players[socket.id] = {
+      x: startX,
+      y: startY,
+      angle: 0,
+      hp: 100,
+      playerId: socket.id,
+      name: name || 'Player'
+    };
 
-  io.emit('updatePlayers', players);
+    io.emit('updatePlayers', players);
+    io.emit('playerCount', Object.keys(players).length);
+  });
 
   socket.on('disconnect', () => {
     console.log('user disconnected');
     delete players[socket.id];
+    io.emit('playerCount', Object.keys(players).length);
     io.emit('updatePlayers', players);
   });
 
