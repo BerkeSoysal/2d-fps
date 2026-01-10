@@ -147,6 +147,25 @@ io.on('connection', (socket) => {
     io.emit('updatePlayers', players);
   });
 
+  // Chat message handling
+  socket.on('chatMessage', (message) => {
+    const player = players[socket.id];
+    if (!player) return;
+
+    // Sanitize and limit message
+    const sanitizedMessage = String(message).substring(0, 50).trim();
+    if (!sanitizedMessage) return;
+
+    // Store message on player for bubble display
+    player.chatMessage = sanitizedMessage;
+    player.chatTime = Date.now();
+
+    io.emit('chatMessage', {
+      name: player.name,
+      message: sanitizedMessage
+    });
+  });
+
   socket.on('playerInput', (data) => {
     const player = players[socket.id];
     if (!player || player.hp <= 0) return;

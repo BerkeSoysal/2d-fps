@@ -38,6 +38,58 @@ socket.on('playerCount', (count) => {
     playerCountDisplay.textContent = `Players: ${count}`;
 });
 
+// Chat handling
+const chatInput = document.getElementById('chatInput');
+const chatMessages = document.getElementById('chatMessages');
+let isChatting = false;
+
+chatInput.addEventListener('focus', () => {
+    isChatting = true;
+});
+
+chatInput.addEventListener('blur', () => {
+    isChatting = false;
+});
+
+chatInput.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter' && chatInput.value.trim()) {
+        socket.emit('chatMessage', chatInput.value.trim());
+        chatInput.value = '';
+        chatInput.blur();
+    }
+});
+
+// Press Enter to focus chat
+window.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !isChatting && gameJoined) {
+        e.preventDefault();
+        chatInput.focus();
+    }
+    // Press Escape to unfocus chat
+    if (e.key === 'Escape' && isChatting) {
+        chatInput.blur();
+    }
+});
+
+socket.on('chatMessage', (data) => {
+    const msgDiv = document.createElement('div');
+    msgDiv.className = 'chatMessage';
+    msgDiv.innerHTML = `<span class="chatName">${escapeHtml(data.name)}:</span> ${escapeHtml(data.message)}`;
+    chatMessages.appendChild(msgDiv);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+
+    // Limit to 50 messages
+    while (chatMessages.children.length > 50) {
+        chatMessages.removeChild(chatMessages.firstChild);
+    }
+});
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
 const keys = {
     w: false,
     a: false,
@@ -52,7 +104,7 @@ const mouse = {
 
 // Input Handling
 window.addEventListener('keydown', (e) => {
-    if (!gameJoined) return;
+    if (!gameJoined || isChatting) return;
     if (e.key === 'w') keys.w = true;
     if (e.key === 'a') keys.a = true;
     if (e.key === 's') keys.s = true;
@@ -326,6 +378,43 @@ function draw() {
         ctx.fillRect(p.x - 20, p.y - 35, 40, 5);
         ctx.fillStyle = '#2ecc71';
         ctx.fillRect(p.x - 20, p.y - 35, 40 * (p.hp / 100), 5);
+
+        // Chat Bubble (shows for 4 seconds)
+        if (p.chatMessage && p.chatTime && (Date.now() - p.chatTime < 4000)) {
+            const msg = p.chatMessage;
+            ctx.font = '12px Arial';
+            const textWidth = ctx.measureText(msg).width;
+            const bubbleWidth = Math.min(textWidth + 16, 150);
+            const bubbleHeight = 24;
+            const bubbleX = p.x - bubbleWidth / 2;
+            const bubbleY = p.y - 75;
+
+            // Bubble background
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+            ctx.beginPath();
+            ctx.roundRect(bubbleX, bubbleY, bubbleWidth, bubbleHeight, 8);
+            ctx.fill();
+
+            // Bubble tail (triangle pointing down)
+            ctx.beginPath();
+            ctx.moveTo(p.x - 6, bubbleY + bubbleHeight);
+            ctx.lineTo(p.x + 6, bubbleY + bubbleHeight);
+            ctx.lineTo(p.x, bubbleY + bubbleHeight + 8);
+            ctx.closePath();
+            ctx.fill();
+
+            // Bubble border
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.roundRect(bubbleX, bubbleY, bubbleWidth, bubbleHeight, 8);
+            ctx.stroke();
+
+            // Text
+            ctx.fillStyle = '#333';
+            ctx.textAlign = 'center';
+            ctx.fillText(msg.length > 20 ? msg.substring(0, 20) + '...' : msg, p.x, bubbleY + 16);
+        }
     }
 
     // Draw Projectiles

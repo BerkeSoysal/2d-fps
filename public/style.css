@@ -92,6 +92,78 @@ canvas {
     border: 1px solid #2ecc71;
 }
 
+/* Chat Box */
+#chatBox {
+    position: fixed;
+    bottom: 15px;
+    left: 15px;
+    width: 300px;
+    z-index: 100;
+    font-family: Arial, sans-serif;
+}
+
+#chatMessages {
+    background: rgba(0, 0, 0, 0.6);
+    border-radius: 8px 8px 0 0;
+    padding: 10px;
+    max-height: 150px;
+    overflow-y: auto;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-bottom: none;
+}
+
+#chatMessages:empty {
+    display: none;
+}
+
+#chatMessages:empty+#chatInputContainer {
+    border-radius: 8px;
+}
+
+.chatMessage {
+    color: #fff;
+    font-size: 13px;
+    margin-bottom: 5px;
+    word-wrap: break-word;
+}
+
+.chatMessage .chatName {
+    color: #3498db;
+    font-weight: bold;
+}
+
+.chatMessage.system {
+    color: #95a5a6;
+    font-style: italic;
+}
+
+#chatInputContainer {
+    background: rgba(0, 0, 0, 0.8);
+    border-radius: 0 0 8px 8px;
+    padding: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+#chatInput {
+    width: 100%;
+    padding: 8px 12px;
+    font-size: 14px;
+    border: none;
+    border-radius: 5px;
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+    outline: none;
+    box-sizing: border-box;
+}
+
+#chatInput:focus {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+#chatInput::placeholder {
+    color: rgba(255, 255, 255, 0.5);
+}
+
 #ui-layer {
     position: absolute;
     top: 0;
