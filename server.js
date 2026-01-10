@@ -249,7 +249,7 @@ setInterval(() => {
   io.emit('stateUpdate', { players, projectiles });
 }, 1000 / 60);
 
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`listening on *:${PORT}`);
 });
