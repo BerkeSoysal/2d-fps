@@ -1,0 +1,20 @@
+[
+  {
+    "name": "asdas",
+    "score": 10,
+    "phase": 1,
+    "date": "2026-01-11T14:32:13.798Z"
+  },
+  {
+    "name": "FinalCheck",
+    "score": 0,
+    "phase": 1,
+    "date": "2026-01-11T14:19:09.813Z"
+  },
+  {
+    "name": "CrashTest",
+    "score": 0,
+    "phase": 1,
+    "date": "2026-01-11T14:25:08.310Z"
+  }
+]

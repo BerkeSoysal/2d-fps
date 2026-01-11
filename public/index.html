@@ -4,38 +4,73 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Simple Socket Game</title>
+    <title>Zombie Survival</title>
     <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
-    <!-- Name Input Modal -->
-    <div id="nameModal">
-        <div id="nameModalContent">
-            <h2>Enter Your Name</h2>
-            <input type="text" id="nameInput" placeholder="Your name..." maxlength="15">
-            <button id="joinBtn">Join Game</button>
+    <!-- HOME SCREEN -->
+    <div id="homeScreen">
+        <div id="homeContent">
+            <h1>🧟 Zombie Survival</h1>
+            <input type="text" id="playerNameInput" placeholder="Enter your name..." maxlength="15">
+            <div id="modeButtons">
+                <button id="singlePlayerBtn">🎮 Single Player</button>
+                <button id="multiPlayerBtn">👥 Multiplayer</button>
+            </div>
+
+            <!-- Room List (shown in multiplayer mode) -->
+            <div id="roomSection" style="display: none;">
+                <h3>Available Rooms</h3>
+                <div id="roomList">
+                    <p class="no-rooms">No rooms available. Create one!</p>
+                </div>
+                <button id="createRoomBtn">+ Create Room</button>
+                <button id="backToMenuBtn">← Back</button>
+            </div>
         </div>
     </div>
 
-    <!-- Player Count Display -->
-    <div id="playerCount">Players: 0</div>
-
-    <!-- Phase Display -->
-    <div id="phaseDisplay">Phase 1</div>
-
-    <!-- Chat Box -->
-    <div id="chatBox">
-        <div id="chatMessages"></div>
-        <div id="chatInputContainer">
-            <input type="text" id="chatInput" placeholder="Press Enter to chat..." maxlength="100">
+    <!-- LOBBY SCREEN (waiting for players) -->
+    <div id="lobbyScreen" style="display: none;">
+        <div id="lobbyContent">
+            <h2>🎯 Room Lobby</h2>
+            <h3 id="roomName">Room Name</h3>
+            <div id="playerList">
+                <h4>Players (<span id="playerCountLobby">0</span>/4)</h4>
+                <ul id="lobbyPlayers"></ul>
+            </div>
+            <button id="startGameBtn" style="display: none;">▶ Start Game</button>
+            <button id="leaveRoomBtn">← Leave Room</button>
+            <p id="waitingText">Waiting for host to start...</p>
         </div>
     </div>
 
-    <div id="ui-layer">
-        <button id="restartBtn">Restart Game</button>
+    <!-- GAME SCREEN -->
+    <div id="gameScreen" style="display: none;">
+        <!-- Player Count Display -->
+        <div id="playerCount">Players: 0</div>
+
+        <!-- Phase Display -->
+        <div id="phaseDisplay">Phase 1</div>
+
+        <!-- Score Display -->
+        <div id="scoreDisplay">Score: 0</div>
+
+        <!-- Chat Box -->
+        <div id="chatBox">
+            <div id="chatMessages"></div>
+            <div id="chatInputContainer">
+                <input type="text" id="chatInput" placeholder="Press Enter to chat..." maxlength="100">
+            </div>
+        </div>
+
+        <div id="ui-layer">
+            <button id="restartBtn">Restart Game</button>
+        </div>
+        <canvas id="gameCanvas"></canvas>
     </div>
-    <canvas id="gameCanvas"></canvas>
+
     <script src="/socket.io/socket.io.js"></script>
     <script src="game.js"></script>
 </body>

@@ -29,6 +29,52 @@ const ZOMBIE_SPEED = 2;
 const CANVAS_WIDTH = 2000;
 const CANVAS_HEIGHT = 1200;
 
+// Room system
+const rooms = {};
+let roomIdCounter = 0;
+
+function createRoom(hostId, hostName, roomName) {
+  const roomId = 'room_' + (++roomIdCounter);
+  rooms[roomId] = {
+    id: roomId,
+    name: roomName || `${hostName}'s Room`,
+    hostId: hostId,
+    players: {},
+    playerList: [{ id: hostId, name: hostName }],
+    maxPlayers: 4,
+    inProgress: false,
+    // Game state
+    projectiles: [],
+    zombies: [],
+    currentPhase: 1,
+    zombiesSpawnedThisPhase: 0,
+    zombiesKilledThisPhase: 0,
+    phaseInProgress: false,
+    zombieIdCounter: 0
+  };
+  return rooms[roomId];
+}
+
+function getRoomsList() {
+  return Object.values(rooms)
+    .filter(r => !r.inProgress && r.playerList.length < r.maxPlayers)
+    .map(r => ({
+      id: r.id,
+      name: r.name,
+      players: r.playerList.length,
+      maxPlayers: r.maxPlayers
+    }));
+}
+
+function getPlayerRoom(socketId) {
+  for (const roomId in rooms) {
+    if (rooms[roomId].players[socketId] || rooms[roomId].playerList.find(p => p.id === socketId)) {
+      return rooms[roomId];
+    }
+  }
+  return null;
+}
+
 // Zombie spawning settings
 const ZOMBIE_SPAWN_INTERVAL = 500; // Spawn every 0.5 seconds during phase
 const ZOMBIE_HP = 30;
@@ -36,7 +82,7 @@ const BASE_ZOMBIE_SPEED = 2;
 const BASE_SIGHT_RADIUS = 400;
 let zombieIdCounter = 0;
 
-// Phase/Wave System
+// Phase/Wave System (for global/single player - will be moved to room later)
 let currentPhase = 1;
 let zombiesSpawnedThisPhase = 0;
 let zombiesKilledThisPhase = 0;
@@ -54,6 +100,17 @@ function getZombieSpeed(phase) {
 function getZombieSightRadius(phase) {
   return BASE_SIGHT_RADIUS + (phase - 1) * 20; // +20 per phase
 }
+
+// Item System
+const ITEM_TYPES = [
+  { type: 'health', chance: 0.4, value: 20 },
+  { type: 'machine_gun', chance: 0.3 },
+  { type: 'shotgun', chance: 0.3 }
+];
+const ITEM_SPAWN_INTERVAL = 8000; // Spawn item every 8 seconds
+const MAX_ITEMS_ON_MAP = 5;
+let items = [];
+let itemIdCounter = 0;
 
 // Available player skins (removed zombie1)
 const SKINS = [
@@ -198,6 +255,151 @@ io.on('connection', (socket) => {
   // Send map data
   socket.emit('mapData', { floors, walls: buildingWalls, decorations });
 
+  // ===== ROOM SYSTEM EVENTS =====
+
+  // Get available rooms
+  socket.on('getRooms', () => {
+    socket.emit('roomsList', getRoomsList());
+  });
+
+  // Create a new room
+  socket.on('createRoom', (data) => {
+    const room = createRoom(socket.id, data.playerName, data.roomName);
+    socket.join(room.id);
+    socket.emit('roomCreated', { roomId: room.id, room: room });
+    io.emit('roomsList', getRoomsList()); // Update room list for all
+  });
+
+  // Join an existing room
+  socket.on('joinRoom', (data) => {
+    const room = rooms[data.roomId];
+    if (!room) {
+      socket.emit('joinError', 'Room not found');
+      return;
+    }
+    if (room.inProgress) {
+      socket.emit('joinError', 'Game already in progress');
+      return;
+    }
+    if (room.playerList.length >= room.maxPlayers) {
+      socket.emit('joinError', 'Room is full');
+      return;
+    }
+
+    room.playerList.push({ id: socket.id, name: data.playerName });
+    socket.join(room.id);
+    socket.emit('roomJoined', { roomId: room.id, room: room });
+    io.to(room.id).emit('lobbyUpdate', { playerList: room.playerList, hostId: room.hostId });
+    io.emit('roomsList', getRoomsList());
+  });
+
+  // Leave room
+  socket.on('leaveRoom', () => {
+    const room = getPlayerRoom(socket.id);
+    if (!room) return;
+
+    // Remove player from room
+    room.playerList = room.playerList.filter(p => p.id !== socket.id);
+    delete room.players[socket.id];
+    socket.leave(room.id);
+
+    // If host left, assign new host or delete room
+    if (room.hostId === socket.id) {
+      if (room.playerList.length > 0) {
+        room.hostId = room.playerList[0].id;
+      } else {
+        delete rooms[room.id];
+        io.emit('roomsList', getRoomsList());
+        return;
+      }
+    }
+
+    io.to(room.id).emit('lobbyUpdate', { playerList: room.playerList, hostId: room.hostId });
+    io.emit('roomsList', getRoomsList());
+  });
+
+  // Start the game (host only)
+  socket.on('startGame', () => {
+    const room = getPlayerRoom(socket.id);
+    if (!room || room.hostId !== socket.id) return;
+
+    room.inProgress = true;
+
+    // Spawn all players in the room
+    for (const playerInfo of room.playerList) {
+      let startX, startY;
+      let attempts = 0;
+      do {
+        startX = Math.random() * CANVAS_WIDTH;
+        startY = Math.random() * CANVAS_HEIGHT;
+        attempts++;
+      } while (checkWallCollision(startX, startY, 20) && attempts < 100);
+
+      const skin = SKINS[Math.floor(Math.random() * SKINS.length)];
+      const playerData = {
+        x: startX,
+        y: startY,
+        angle: 0,
+        hp: 100,
+        playerId: playerInfo.id,
+        name: playerInfo.name,
+        skin: skin,
+        weapon: 'pistol',
+        score: 0
+      };
+
+      // Add to both room players AND global players
+      room.players[playerInfo.id] = playerData;
+      players[playerInfo.id] = playerData;
+    }
+
+    io.to(room.id).emit('gameStarted', { roomId: room.id });
+    io.to(room.id).emit('updatePlayers', players);
+    io.to(room.id).emit('phaseChange', { phase: 1, message: 'Phase 1 Starting!' });
+    io.emit('roomsList', getRoomsList());
+    io.emit('playerCount', Object.keys(players).length);
+  });
+
+  // Single player - create private room and start immediately
+  socket.on('startSinglePlayer', (data) => {
+    const room = createRoom(socket.id, data.playerName, 'Single Player');
+    room.isSinglePlayer = true;
+    room.inProgress = true;
+    socket.join(room.id);
+
+    let startX, startY;
+    let attempts = 0;
+    do {
+      startX = Math.random() * CANVAS_WIDTH;
+      startY = Math.random() * CANVAS_HEIGHT;
+      attempts++;
+    } while (checkWallCollision(startX, startY, 20) && attempts < 100);
+
+    const skin = SKINS[Math.floor(Math.random() * SKINS.length)];
+    const playerData = {
+      x: startX,
+      y: startY,
+      angle: 0,
+      hp: 100,
+      playerId: socket.id,
+      name: data.playerName,
+      skin: skin,
+      weapon: 'pistol',
+      score: 0
+    };
+
+    // Add to both room players AND global players (for game loop compatibility)
+    room.players[socket.id] = playerData;
+    players[socket.id] = playerData;
+
+    socket.emit('gameStarted', { roomId: room.id });
+    socket.emit('updatePlayers', players);
+    socket.emit('phaseChange', { phase: 1, message: 'Phase 1 Starting!' });
+    io.emit('playerCount', Object.keys(players).length);
+  });
+
+  // ===== LEGACY GAME EVENTS (for compatibility) =====
+
   // Wait for player to set their name before spawning
   socket.on('setName', (name) => {
     let startX, startY;
@@ -286,13 +488,36 @@ io.on('connection', (socket) => {
     const player = players[socket.id];
     if (!player || player.hp <= 0) return;
 
-    projectiles.push({
-      x: player.x,
-      y: player.y,
-      vx: Math.cos(player.angle) * PROJECTILE_SPEED,
-      vy: Math.sin(player.angle) * PROJECTILE_SPEED,
-      ownerId: socket.id
-    });
+    const weapon = player.weapon || 'pistol';
+
+    if (weapon === 'shotgun') {
+      // Shotgun: 5 projectiles with spread, short range (marked with maxDistance)
+      const spreadAngles = [-0.2, -0.1, 0, 0.1, 0.2];
+      for (const offset of spreadAngles) {
+        const angle = player.angle + offset;
+        projectiles.push({
+          x: player.x,
+          y: player.y,
+          vx: Math.cos(angle) * PROJECTILE_SPEED,
+          vy: Math.sin(angle) * PROJECTILE_SPEED,
+          ownerId: socket.id,
+          damage: 15,
+          maxDistance: 200, // Short range
+          startX: player.x,
+          startY: player.y
+        });
+      }
+    } else {
+      // Pistol or Machine Gun: single projectile
+      projectiles.push({
+        x: player.x,
+        y: player.y,
+        vx: Math.cos(player.angle) * PROJECTILE_SPEED,
+        vy: Math.sin(player.angle) * PROJECTILE_SPEED,
+        ownerId: socket.id,
+        damage: weapon === 'machine_gun' ? 8 : 10
+      });
+    }
   });
 
   socket.on('restart', () => {
@@ -325,6 +550,17 @@ setInterval(() => {
     if (p.x < -1000 || p.x > 3000 || p.y < -1000 || p.y > 3000) {
       projectiles.splice(i, 1);
       continue;
+    }
+
+    // Check max distance for shotgun projectiles
+    if (p.maxDistance) {
+      const traveledDist = Math.sqrt(
+        Math.pow(p.x - p.startX, 2) + Math.pow(p.y - p.startY, 2)
+      );
+      if (traveledDist > p.maxDistance) {
+        projectiles.splice(i, 1);
+        continue;
+      }
     }
 
     // Wall Collision for Projectiles
@@ -376,13 +612,20 @@ setInterval(() => {
       const dist = Math.sqrt(dx * dx + dy * dy);
 
       if (dist < 20) {
-        zombie.hp -= 10;
+        const damage = p.damage || 10;
+        zombie.hp -= damage;
         projectiles.splice(i, 1);
 
         if (zombie.hp <= 0) {
           // Zombie died - emit death event for blood
           io.emit('zombieDeath', { x: zombie.x, y: zombie.y });
           zombiesKilledThisPhase++; // Track kills for phase progression
+
+          // Award score to the player who killed the zombie
+          const killer = players[p.ownerId];
+          if (killer) {
+            killer.score = (killer.score || 0) + 10;
+          }
         }
         break;
       }
@@ -483,7 +726,37 @@ setInterval(() => {
     }
   }
 
-  io.emit('stateUpdate', { players, projectiles, zombies });
+  // Item Pickup Detection
+  for (const id in players) {
+    const player = players[id];
+    if (player.hp <= 0) continue;
+
+    for (let i = items.length - 1; i >= 0; i--) {
+      const item = items[i];
+      const dx = player.x - item.x;
+      const dy = player.y - item.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      if (dist < 30) {
+        // Pick up the item
+        if (item.type === 'health') {
+          player.hp = Math.min(100, player.hp + 20);
+          io.to(id).emit('heal', { hp: player.hp });
+        } else if (item.type === 'machine_gun') {
+          player.weapon = 'machine_gun';
+          io.to(id).emit('weaponPickup', { weapon: 'machine_gun' });
+        } else if (item.type === 'shotgun') {
+          player.weapon = 'shotgun';
+          io.to(id).emit('weaponPickup', { weapon: 'shotgun' });
+        }
+
+        io.emit('itemCollected', { itemId: item.id, playerId: id, type: item.type });
+        items.splice(i, 1);
+      }
+    }
+  }
+
+  io.emit('stateUpdate', { players, projectiles, zombies, items });
 }, 1000 / 60);
 
 // Spawn zombies at map edges - Phase based
@@ -574,6 +847,50 @@ setInterval(() => {
 
   zombiesSpawnedThisPhase++;
 }, ZOMBIE_SPAWN_INTERVAL);
+
+// Item Spawning
+setInterval(() => {
+  // Only spawn if there are players and not too many items
+  const playerIds = Object.keys(players).filter(id => players[id].hp > 0);
+  if (playerIds.length === 0) return;
+  if (items.length >= MAX_ITEMS_ON_MAP) return;
+
+  // Random chance to spawn (not every interval)
+  if (Math.random() > 0.5) return;
+
+  // Pick a random item type based on chance
+  const rand = Math.random();
+  let cumulative = 0;
+  let selectedType = ITEM_TYPES[0];
+
+  for (const itemType of ITEM_TYPES) {
+    cumulative += itemType.chance;
+    if (rand <= cumulative) {
+      selectedType = itemType;
+      break;
+    }
+  }
+
+  // Find a valid spawn position (not in walls)
+  let x, y;
+  let attempts = 0;
+  do {
+    x = 100 + Math.random() * (CANVAS_WIDTH - 200);
+    y = 100 + Math.random() * (CANVAS_HEIGHT - 200);
+    attempts++;
+  } while (checkWallCollision(x, y, 20) && attempts < 50);
+
+  if (attempts >= 50) return; // Couldn't find valid spot
+
+  items.push({
+    id: 'item_' + (++itemIdCounter),
+    type: selectedType.type,
+    x: x,
+    y: y
+  });
+
+  console.log(`Spawned ${selectedType.type} at (${Math.round(x)}, ${Math.round(y)})`);
+}, ITEM_SPAWN_INTERVAL);
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
