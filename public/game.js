@@ -141,6 +141,7 @@ restartBtn.addEventListener('click', () => {
 // Main Loop
 let players = {};
 let projectiles = [];
+let zombies = [];
 let walls = [];
 let floors = [];
 let flashOpacity = 0;
@@ -234,6 +235,20 @@ socket.on('mapData', (data) => {
 socket.on('stateUpdate', (state) => {
     players = state.players;
     projectiles = state.projectiles;
+    zombies = state.zombies || [];
+});
+
+// Handle zombie death - create blood splatter
+socket.on('zombieDeath', (data) => {
+    for (let i = 0; i < 10; i++) {
+        bloodSplatters.push({
+            x: data.x + (Math.random() - 0.5) * 30,
+            y: data.y + (Math.random() - 0.5) * 30,
+            size: Math.random() * 6 + 3,
+            opacity: 1,
+            createdAt: Date.now()
+        });
+    }
 });
 
 // Audio System
@@ -443,6 +458,32 @@ function draw() {
         if (img && img.complete) {
             ctx.drawImage(img, deco.x, deco.y, deco.w, deco.h);
         }
+    }
+
+    // Draw Zombies
+    const zombieSprite = playerSkins.zombie1;
+    for (const zombie of zombies) {
+        ctx.save();
+        ctx.translate(zombie.x, zombie.y);
+        ctx.rotate(zombie.angle);
+
+        if (zombieSprite && zombieSprite.complete) {
+            ctx.drawImage(zombieSprite, -25, -20, 50, 40);
+        } else {
+            // Fallback green circle
+            ctx.fillStyle = '#2ecc71';
+            ctx.beginPath();
+            ctx.arc(0, 0, 15, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        ctx.restore();
+
+        // Zombie HP bar
+        ctx.fillStyle = '#333';
+        ctx.fillRect(zombie.x - 15, zombie.y - 30, 30, 4);
+        ctx.fillStyle = '#e74c3c';
+        ctx.fillRect(zombie.x - 15, zombie.y - 30, 30 * (zombie.hp / 30), 4);
     }
 
     // Draw Players

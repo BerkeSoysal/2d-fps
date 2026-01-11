@@ -22,12 +22,19 @@ app.get('/', (req, res) => {
 
 const players = {};
 const projectiles = [];
+const zombies = [];
 const SPEED = 5;
 const PROJECTILE_SPEED = 18;
+const ZOMBIE_SPEED = 2;
 const CANVAS_WIDTH = 2000;
 const CANVAS_HEIGHT = 1200;
 
-// Available player skins
+// Zombie spawning settings
+const ZOMBIE_SPAWN_INTERVAL = 3000; // Spawn every 3 seconds
+const ZOMBIE_HP = 30;
+let zombieIdCounter = 0;
+
+// Available player skins (removed zombie1)
 const SKINS = [
   'hitman1',
   'manBlue',
@@ -36,8 +43,7 @@ const SKINS = [
   'robot1',
   'soldier1',
   'survivor1',
-  'womanGreen',
-  'zombie1'
+  'womanGreen'
 ];
 
 // Building layout - floors define areas with different tiles
@@ -317,10 +323,130 @@ setInterval(() => {
         }
       }
     }
+
+    // Check projectile vs zombie collision
+    for (const zombie of zombies) {
+      const dx = p.x - zombie.x;
+      const dy = p.y - zombie.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      if (dist < 20) {
+        zombie.hp -= 10;
+        projectiles.splice(i, 1);
+
+        if (zombie.hp <= 0) {
+          // Zombie died - emit death event for blood
+          io.emit('zombieDeath', { x: zombie.x, y: zombie.y });
+        }
+        break;
+      }
+    }
   }
 
-  io.emit('stateUpdate', { players, projectiles });
+  // Remove dead zombies
+  for (let i = zombies.length - 1; i >= 0; i--) {
+    if (zombies[i].hp <= 0) {
+      zombies.splice(i, 1);
+    }
+  }
+
+  // Move zombies towards their target player
+  const playerIds = Object.keys(players).filter(id => players[id].hp > 0);
+  for (const zombie of zombies) {
+    // If no target or target is dead, pick new random player
+    if (!zombie.targetId || !players[zombie.targetId] || players[zombie.targetId].hp <= 0) {
+      if (playerIds.length > 0) {
+        zombie.targetId = playerIds[Math.floor(Math.random() * playerIds.length)];
+      } else {
+        continue;
+      }
+    }
+
+    const target = players[zombie.targetId];
+    if (!target) continue;
+
+    // Move towards target
+    const dx = target.x - zombie.x;
+    const dy = target.y - zombie.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist > 0) {
+      zombie.x += (dx / dist) * ZOMBIE_SPEED;
+      zombie.y += (dy / dist) * ZOMBIE_SPEED;
+      zombie.angle = Math.atan2(dy, dx);
+    }
+
+    // Check if zombie reached player
+    if (dist < 25) {
+      target.hp -= 10;
+      io.to(zombie.targetId).emit('hurt');
+
+      // Push zombie back a bit
+      zombie.x -= (dx / dist) * 30;
+      zombie.y -= (dy / dist) * 30;
+
+      // Pick a new target
+      zombie.targetId = playerIds[Math.floor(Math.random() * playerIds.length)];
+
+      if (target.hp <= 0) {
+        target.hp = 0;
+        io.emit('playerDeath', {
+          x: target.x,
+          y: target.y,
+          killerName: '🧟 Zombie',
+          victimName: target.name
+        });
+      }
+    }
+  }
+
+  io.emit('stateUpdate', { players, projectiles, zombies });
 }, 1000 / 60);
+
+// Spawn zombies at map edges
+setInterval(() => {
+  // Only spawn if there are players
+  const playerIds = Object.keys(players).filter(id => players[id].hp > 0);
+  if (playerIds.length === 0) return;
+
+  // Limit max zombies
+  if (zombies.length >= 20) return;
+
+  // Random edge: 0=top, 1=right, 2=bottom, 3=left
+  const edge = Math.floor(Math.random() * 4);
+  let x, y;
+
+  switch (edge) {
+    case 0: // Top
+      x = Math.random() * CANVAS_WIDTH;
+      y = -20;
+      break;
+    case 1: // Right
+      x = CANVAS_WIDTH + 20;
+      y = Math.random() * CANVAS_HEIGHT;
+      break;
+    case 2: // Bottom
+      x = Math.random() * CANVAS_WIDTH;
+      y = CANVAS_HEIGHT + 20;
+      break;
+    case 3: // Left
+      x = -20;
+      y = Math.random() * CANVAS_HEIGHT;
+      break;
+  }
+
+  // Pick random target
+  const targetId = playerIds[Math.floor(Math.random() * playerIds.length)];
+
+  zombies.push({
+    id: 'zombie_' + (++zombieIdCounter),
+    x: x,
+    y: y,
+    angle: 0,
+    hp: ZOMBIE_HP,
+    targetId: targetId
+  });
+}, ZOMBIE_SPAWN_INTERVAL);
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
