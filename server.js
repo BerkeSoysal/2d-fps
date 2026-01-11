@@ -30,10 +30,30 @@ const CANVAS_WIDTH = 2000;
 const CANVAS_HEIGHT = 1200;
 
 // Zombie spawning settings
-const ZOMBIE_SPAWN_INTERVAL = 3000; // Spawn every 3 seconds
+const ZOMBIE_SPAWN_INTERVAL = 500; // Spawn every 0.5 seconds during phase
 const ZOMBIE_HP = 30;
-const ZOMBIE_SIGHT_RADIUS = 400; // How far zombies can see
+const BASE_ZOMBIE_SPEED = 2;
+const BASE_SIGHT_RADIUS = 400;
 let zombieIdCounter = 0;
+
+// Phase/Wave System
+let currentPhase = 1;
+let zombiesSpawnedThisPhase = 0;
+let zombiesKilledThisPhase = 0;
+let phaseInProgress = false;
+const MAX_PHASE = 10;
+
+function getPhaseZombieCount(phase) {
+  return phase * 10; // Phase 1=10, Phase 2=20, ... Phase 10=100
+}
+
+function getZombieSpeed(phase) {
+  return BASE_ZOMBIE_SPEED + (phase - 1) * 0.2; // +0.2 per phase
+}
+
+function getZombieSightRadius(phase) {
+  return BASE_SIGHT_RADIUS + (phase - 1) * 20; // +20 per phase
+}
 
 // Available player skins (removed zombie1)
 const SKINS = [
@@ -154,8 +174,8 @@ function canSeePlayer(zombie, player) {
   const dy = player.y - zombie.y;
   const dist = Math.sqrt(dx * dx + dy * dy);
 
-  // Too far to see
-  if (dist > ZOMBIE_SIGHT_RADIUS) return false;
+  // Too far to see (uses phase-based sight radius)
+  if (dist > getZombieSightRadius(currentPhase)) return false;
 
   // Step along the ray and check for wall collisions
   const steps = Math.floor(dist / 20);
@@ -362,6 +382,7 @@ setInterval(() => {
         if (zombie.hp <= 0) {
           // Zombie died - emit death event for blood
           io.emit('zombieDeath', { x: zombie.x, y: zombie.y });
+          zombiesKilledThisPhase++; // Track kills for phase progression
         }
         break;
       }
@@ -406,8 +427,9 @@ setInterval(() => {
       const dist = Math.sqrt(dx * dx + dy * dy);
 
       if (dist > 0) {
-        zombie.x += (dx / dist) * ZOMBIE_SPEED;
-        zombie.y += (dy / dist) * ZOMBIE_SPEED;
+        const speed = zombie.speed || BASE_ZOMBIE_SPEED;
+        zombie.x += (dx / dist) * speed;
+        zombie.y += (dy / dist) * speed;
         zombie.angle = Math.atan2(dy, dx);
       }
       zombie.wandering = false;
@@ -419,8 +441,9 @@ setInterval(() => {
         zombie.wandering = true;
       }
 
-      zombie.x += Math.cos(zombie.wanderAngle) * ZOMBIE_SPEED * 0.5;
-      zombie.y += Math.sin(zombie.wanderAngle) * ZOMBIE_SPEED * 0.5;
+      const speed = zombie.speed || BASE_ZOMBIE_SPEED;
+      zombie.x += Math.cos(zombie.wanderAngle) * speed * 0.5;
+      zombie.y += Math.sin(zombie.wanderAngle) * speed * 0.5;
       zombie.angle = zombie.wanderAngle;
 
       // Bounce off map edges
@@ -463,14 +486,55 @@ setInterval(() => {
   io.emit('stateUpdate', { players, projectiles, zombies });
 }, 1000 / 60);
 
-// Spawn zombies at map edges
+// Spawn zombies at map edges - Phase based
 setInterval(() => {
-  // Only spawn if there are players
+  // Only spawn if there are players alive
   const playerIds = Object.keys(players).filter(id => players[id].hp > 0);
+
+  // Check if all players are dead - reset to phase 1
+  if (playerIds.length === 0 && Object.keys(players).length > 0) {
+    if (currentPhase > 1 || zombiesSpawnedThisPhase > 0) {
+      currentPhase = 1;
+      zombiesSpawnedThisPhase = 0;
+      zombiesKilledThisPhase = 0;
+      zombies.length = 0; // Clear all zombies
+      phaseInProgress = false;
+      io.emit('phaseChange', { phase: currentPhase, message: 'Game Over! Restarting...' });
+    }
+    return;
+  }
+
   if (playerIds.length === 0) return;
 
-  // Limit max zombies
-  if (zombies.length >= 20) return;
+  // Start phase if not in progress
+  if (!phaseInProgress) {
+    phaseInProgress = true;
+    zombiesSpawnedThisPhase = 0;
+    zombiesKilledThisPhase = 0;
+    io.emit('phaseChange', { phase: currentPhase, message: `Phase ${currentPhase} Starting!` });
+  }
+
+  // Check if phase is complete (all zombies for this phase killed)
+  const phaseZombieCount = getPhaseZombieCount(currentPhase);
+  if (zombiesKilledThisPhase >= phaseZombieCount && zombies.length === 0) {
+    // Phase complete!
+    if (currentPhase < MAX_PHASE) {
+      currentPhase++;
+      zombiesSpawnedThisPhase = 0;
+      zombiesKilledThisPhase = 0;
+      io.emit('phaseChange', { phase: currentPhase, message: `Phase ${currentPhase} Starting!` });
+    } else {
+      io.emit('phaseChange', { phase: currentPhase, message: 'You Win! All phases complete!' });
+      phaseInProgress = false;
+      return;
+    }
+  }
+
+  // Don't spawn more if we've spawned enough for this phase
+  if (zombiesSpawnedThisPhase >= phaseZombieCount) return;
+
+  // Limit active zombies on screen
+  if (zombies.length >= 15) return;
 
   // Random edge: 0=top, 1=right, 2=bottom, 3=left
   const edge = Math.floor(Math.random() * 4);
@@ -504,8 +568,11 @@ setInterval(() => {
     y: y,
     angle: 0,
     hp: ZOMBIE_HP,
-    targetId: targetId
+    targetId: targetId,
+    speed: getZombieSpeed(currentPhase)
   });
+
+  zombiesSpawnedThisPhase++;
 }, ZOMBIE_SPAWN_INTERVAL);
 
 const PORT = process.env.PORT || 3000;

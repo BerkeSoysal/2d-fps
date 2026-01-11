@@ -38,6 +38,19 @@ socket.on('playerCount', (count) => {
     playerCountDisplay.textContent = `Players: ${count}`;
 });
 
+// Phase change handling
+const phaseDisplay = document.getElementById('phaseDisplay');
+socket.on('phaseChange', (data) => {
+    phaseDisplay.textContent = `Phase ${data.phase}`;
+
+    // Add phase announcement to chat
+    const msgDiv = document.createElement('div');
+    msgDiv.className = 'chatMessage system';
+    msgDiv.innerHTML = `🎯 ${data.message}`;
+    chatMessages.appendChild(msgDiv);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+});
+
 // Chat handling
 const chatInput = document.getElementById('chatInput');
 const chatMessages = document.getElementById('chatMessages');
