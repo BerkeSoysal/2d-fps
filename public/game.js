@@ -144,9 +144,51 @@ let walls = [];
 let floors = [];
 let flashOpacity = 0;
 
-// Assets
-const playerImg = new Image();
-playerImg.src = 'kenney_top-down-shooter/PNG/Hitman 1/hitman1_gun.png';
+// Blood splatter particles
+let bloodSplatters = [];
+
+// Handle player death - create blood splatter
+socket.on('playerDeath', (data) => {
+    // Create blood particles at death location
+    for (let i = 0; i < 15; i++) {
+        bloodSplatters.push({
+            x: data.x + (Math.random() - 0.5) * 40,
+            y: data.y + (Math.random() - 0.5) * 40,
+            size: Math.random() * 8 + 4,
+            opacity: 1,
+            createdAt: Date.now()
+        });
+    }
+
+    // Add kill message to chat
+    const msgDiv = document.createElement('div');
+    msgDiv.className = 'chatMessage system';
+    msgDiv.innerHTML = `💀 <span class="chatName">${escapeHtml(data.killerName)}</span> killed <span class="chatName">${escapeHtml(data.victimName)}</span>`;
+    chatMessages.appendChild(msgDiv);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+});
+
+// Assets - Player skins
+const playerSkins = {
+    hitman1: new Image(),
+    manBlue: new Image(),
+    manBrown: new Image(),
+    manOld: new Image(),
+    robot1: new Image(),
+    soldier1: new Image(),
+    survivor1: new Image(),
+    womanGreen: new Image(),
+    zombie1: new Image()
+};
+playerSkins.hitman1.src = 'kenney_top-down-shooter/PNG/Hitman 1/hitman1_gun.png';
+playerSkins.manBlue.src = 'kenney_top-down-shooter/PNG/Man Blue/manBlue_gun.png';
+playerSkins.manBrown.src = 'kenney_top-down-shooter/PNG/Man Brown/manBrown_gun.png';
+playerSkins.manOld.src = 'kenney_top-down-shooter/PNG/Man Old/manOld_gun.png';
+playerSkins.robot1.src = 'kenney_top-down-shooter/PNG/Robot 1/robot1_gun.png';
+playerSkins.soldier1.src = 'kenney_top-down-shooter/PNG/Soldier 1/soldier1_gun.png';
+playerSkins.survivor1.src = 'kenney_top-down-shooter/PNG/Survivor 1/survivor1_gun.png';
+playerSkins.womanGreen.src = 'kenney_top-down-shooter/PNG/Woman Green/womanGreen_gun.png';
+playerSkins.zombie1.src = 'kenney_top-down-shooter/PNG/Zombie 1/zoimbie1_gun.png';
 
 const grassImg = new Image();
 grassImg.src = 'kenney_top-down-shooter/PNG/Tiles/tile_01.png';
@@ -290,13 +332,13 @@ function draw() {
     const TILE_SIZE = 64; // Kenney tiles are typically 64x64
     if (grassImg.complete) {
         for (let x = 0; x < 2000; x += TILE_SIZE) {
-            for (let y = 0; y < 2000; y += TILE_SIZE) {
+            for (let y = 0; y < 1200; y += TILE_SIZE) {
                 ctx.drawImage(grassImg, x, y, TILE_SIZE, TILE_SIZE);
             }
         }
     } else {
         ctx.fillStyle = '#4a9'; // Fallback green
-        ctx.fillRect(0, 0, 2000, 2000);
+        ctx.fillRect(0, 0, 2000, 1200);
     }
 
     // Draw Floors (on top of grass)
@@ -322,6 +364,25 @@ function draw() {
             ctx.fillStyle = floor.tile === 'bathroom' ? '#8BA9A5' : '#c89f65';
             ctx.fillRect(floor.x, floor.y, floor.w, floor.h);
         }
+    }
+
+    // Draw Blood Splatters (fade out over 8 seconds)
+    const now = Date.now();
+    for (let i = bloodSplatters.length - 1; i >= 0; i--) {
+        const blood = bloodSplatters[i];
+        const age = now - blood.createdAt;
+        const fadeTime = 8000; // 8 seconds to fade
+
+        if (age > fadeTime) {
+            bloodSplatters.splice(i, 1);
+            continue;
+        }
+
+        const opacity = 1 - (age / fadeTime);
+        ctx.fillStyle = `rgba(139, 0, 0, ${opacity * 0.8})`; // Dark red
+        ctx.beginPath();
+        ctx.arc(blood.x, blood.y, blood.size, 0, Math.PI * 2);
+        ctx.fill();
     }
 
     // Draw Walls
@@ -358,12 +419,9 @@ function draw() {
         ctx.translate(p.x, p.y);
         ctx.rotate(p.angle);
 
-        // Draw Player Sprite
-        // Image is likely facing right or up, adjust rotation if needed. 
-        // Hitman 1 sprite faces right by default.
-        // Size: let's draw it approx 40x40 to match our previous circle radius
-        // The sprite might be bigger, so we verify load or just draw with width/height
-        ctx.drawImage(playerImg, -25, -20, 50, 40); // Centered approx
+        // Draw Player Sprite using their assigned skin
+        const spriteToUse = playerSkins[p.skin] || playerSkins.hitman1;
+        ctx.drawImage(spriteToUse, -25, -20, 50, 40); // Centered approx
 
         ctx.restore();
 

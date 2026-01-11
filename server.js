@@ -23,9 +23,22 @@ app.get('/', (req, res) => {
 const players = {};
 const projectiles = [];
 const SPEED = 5;
-const PROJECTILE_SPEED = 10;
+const PROJECTILE_SPEED = 18;
 const CANVAS_WIDTH = 2000;
-const CANVAS_HEIGHT = 2000;
+const CANVAS_HEIGHT = 1200;
+
+// Available player skins
+const SKINS = [
+  'hitman1',
+  'manBlue',
+  'manBrown',
+  'manOld',
+  'robot1',
+  'soldier1',
+  'survivor1',
+  'womanGreen',
+  'zombie1'
+];
 
 // Building layout - floors define areas with different tiles
 const floors = [
@@ -42,28 +55,28 @@ const floors = [
 // Decorations (non-collision furniture, plants, etc.)
 const decorations = [
   // Living room furniture
-  { x: 620, y: 420, w: 64, h: 128, tile: 'couch_green_left' },
-  { x: 684, y: 420, w: 64, h: 128, tile: 'couch_green_right' },
-  { x: 800, y: 550, w: 64, h: 64, tile: 'table_round' },
-  { x: 980, y: 720, w: 64, h: 64, tile: 'rug' },
+  { x: 620, y: 420, w: 64, h: 128, tile: 'couch_green_left', collidable: true },
+  { x: 684, y: 420, w: 64, h: 128, tile: 'couch_green_right', collidable: true },
+  { x: 800, y: 550, w: 64, h: 64, tile: 'table_round', collidable: true },
+  { x: 980, y: 720, w: 64, h: 64, tile: 'rug' }, // Not collidable
 
   // Bathroom fixtures
-  { x: 1150, y: 450, w: 64, h: 64, tile: 'plant' },
+  { x: 1150, y: 450, w: 64, h: 64, tile: 'plant' }, // Not collidable
 
   // Kitchen area
-  { x: 620, y: 850, w: 64, h: 64, tile: 'table_round' },
-  { x: 700, y: 840, w: 128, h: 64, tile: 'couch_teal' },
+  { x: 620, y: 850, w: 64, h: 64, tile: 'table_round', collidable: true },
+  { x: 700, y: 840, w: 128, h: 64, tile: 'couch_teal', collidable: true },
 
-  // Outdoor plants (on grass)
-  { x: 400, y: 300, w: 64, h: 64, tile: 'bush' },
-  { x: 450, y: 350, w: 64, h: 64, tile: 'bush' },
-  { x: 1400, y: 500, w: 64, h: 64, tile: 'bush' },
-  { x: 1450, y: 600, w: 64, h: 64, tile: 'bush' },
-  { x: 300, y: 900, w: 64, h: 64, tile: 'bush' },
+  // Outdoor plants (on grass) - collidable bushes
+  { x: 400, y: 300, w: 64, h: 64, tile: 'bush', collidable: true },
+  { x: 450, y: 350, w: 64, h: 64, tile: 'bush', collidable: true },
+  { x: 1400, y: 500, w: 64, h: 64, tile: 'bush', collidable: true },
+  { x: 1450, y: 600, w: 64, h: 64, tile: 'bush', collidable: true },
+  { x: 300, y: 900, w: 64, h: 64, tile: 'bush', collidable: true },
 
-  // Some crates outside
-  { x: 1500, y: 300, w: 64, h: 64, tile: 'crate' },
-  { x: 1564, y: 300, w: 64, h: 64, tile: 'crate' }
+  // Some crates outside - collidable
+  { x: 1500, y: 300, w: 64, h: 64, tile: 'crate', collidable: true },
+  { x: 1564, y: 300, w: 64, h: 64, tile: 'crate', collidable: true }
 ];
 
 // Building walls (collision + visual)
@@ -110,6 +123,24 @@ function checkWallCollision(x, y, radius) {
   return false;
 }
 
+// Check collision with collidable decorations (crates, bushes, etc.)
+function checkDecorationCollision(x, y, radius = 15) {
+  for (const deco of decorations) {
+    if (!deco.collidable) continue;
+
+    const closestX = Math.max(deco.x, Math.min(x, deco.x + deco.w));
+    const closestY = Math.max(deco.y, Math.min(y, deco.y + deco.h));
+
+    const dx = x - closestX;
+    const dy = y - closestY;
+
+    if ((dx * dx + dy * dy) < (radius * radius)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 io.on('connection', (socket) => {
   console.log('a user connected: ' + socket.id);
 
@@ -127,13 +158,17 @@ io.on('connection', (socket) => {
       attempts++;
     } while (checkWallCollision(startX, startY, 20) && attempts < 100);
 
+    // Assign random skin
+    const skin = SKINS[Math.floor(Math.random() * SKINS.length)];
+
     players[socket.id] = {
       x: startX,
       y: startY,
       angle: 0,
       hp: 100,
       playerId: socket.id,
-      name: name || 'Player'
+      name: name || 'Player',
+      skin: skin
     };
 
     io.emit('updatePlayers', players);
@@ -182,16 +217,14 @@ io.on('connection', (socket) => {
     newX = Math.max(0, Math.min(CANVAS_WIDTH, newX));
     newY = Math.max(0, Math.min(CANVAS_HEIGHT, newY));
 
-    // Wall Collision Logic
+    // Wall and Decoration Collision Logic
     // Check X axis movement
-    if (!checkWallCollision(newX, player.y, 20)) {
+    if (!checkWallCollision(newX, player.y, 20) && !checkDecorationCollision(newX, player.y, 15)) {
       player.x = newX;
     }
 
     // Check Y axis movement (allows sliding if only one axis is blocked)
-    // Re-calculate newX based on confirmed player.x to check Y independently 
-    // is usually better for sliding, but here we just check if moving Y from current X implies collision
-    if (!checkWallCollision(player.x, newY, 20)) {
+    if (!checkWallCollision(player.x, newY, 20) && !checkDecorationCollision(player.x, newY, 15)) {
       player.y = newY;
     }
 
@@ -265,14 +298,20 @@ setInterval(() => {
         const dy = p.y - player.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
 
-        if (dist < 20) { // Assume player radius is 20
+        if (dist < 20) {
           player.hp -= 10;
           io.to(id).emit('hurt'); // Notify victim
           io.to(p.ownerId).emit('hit'); // Notify attacker
           projectiles.splice(i, 1);
           if (player.hp <= 0) {
-            // Handle death if needed, for now just 0 hp
             player.hp = 0;
+            // Emit death event for blood splatter
+            io.emit('playerDeath', {
+              x: player.x,
+              y: player.y,
+              killerName: players[p.ownerId]?.name || 'Unknown',
+              victimName: player.name
+            });
           }
           break;
         }
