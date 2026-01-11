@@ -1,6 +1,8 @@
 const express = require('express');
 const app = express();
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 const server = http.createServer(app);
 const { Server } = require("socket.io");
 const io = new Server(server, {
@@ -15,6 +17,63 @@ const io = new Server(server, {
 });
 
 app.use(express.static('public'));
+app.use(express.json()); // For parsing JSON body
+
+// High Scores File
+const HIGHSCORES_FILE = path.join(__dirname, 'highscores.json');
+
+function loadHighScores() {
+  try {
+    if (fs.existsSync(HIGHSCORES_FILE)) {
+      const data = fs.readFileSync(HIGHSCORES_FILE, 'utf8');
+      return JSON.parse(data);
+    }
+  } catch (err) {
+    console.error('Error loading highscores:', err);
+  }
+  return [];
+}
+
+function saveHighScores(scores) {
+  try {
+    // Sort by score descending and keep top 20
+    scores.sort((a, b) => b.score - a.score);
+    scores = scores.slice(0, 20);
+    fs.writeFileSync(HIGHSCORES_FILE, JSON.stringify(scores, null, 2));
+    return true;
+  } catch (err) {
+    console.error('Error saving highscores:', err);
+    return false;
+  }
+}
+
+// API Endpoints for High Scores
+app.get('/api/highscores', (req, res) => {
+  const scores = loadHighScores();
+  res.json(scores);
+});
+
+app.post('/api/highscores', (req, res) => {
+  const { name, score, phase } = req.body;
+
+  if (!name || score === undefined) {
+    return res.status(400).json({ error: 'Name and score are required' });
+  }
+
+  const scores = loadHighScores();
+  scores.push({
+    name: String(name).substring(0, 15),
+    score: Number(score),
+    phase: Number(phase) || 1,
+    date: new Date().toISOString()
+  });
+
+  if (saveHighScores(scores)) {
+    res.json({ success: true, scores: loadHighScores() });
+  } else {
+    res.status(500).json({ error: 'Failed to save score' });
+  }
+});
 
 app.get('/', (req, res) => {
   res.sendFile(__dirname + '/public/index.html');

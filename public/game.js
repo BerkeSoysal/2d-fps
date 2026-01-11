@@ -31,11 +31,30 @@ const leaveRoomBtn = document.getElementById('leaveRoomBtn');
 const waitingText = document.getElementById('waitingText');
 const roomNameDisplay = document.getElementById('roomName');
 
+// Game Over elements
+const gameOverScreen = document.getElementById('gameOverScreen');
+const finalScoreDisplay = document.getElementById('finalScore');
+const finalPhaseDisplay = document.getElementById('finalPhase');
+const submitScoreBtn = document.getElementById('submitScoreBtn');
+const submitScoreSection = document.getElementById('submitScoreSection');
+const scoreSubmittedText = document.getElementById('scoreSubmitted');
+const playAgainBtn = document.getElementById('playAgainBtn');
+const mainMenuBtn = document.getElementById('mainMenuBtn');
+
+// High Scores elements
+const highScoresScreen = document.getElementById('highScoresScreen');
+const highScoresBtn = document.getElementById('highScoresBtn');
+const scoresBody = document.getElementById('scoresBody');
+const backFromScoresBtn = document.getElementById('backFromScoresBtn');
+
 // Game state
 let myName = '';
 let gameJoined = false;
 let currentRoomId = null;
 let isHost = false;
+let isDead = false;
+let currentPhase = 1;
+let scoreSubmitted = false;
 
 // Single Player
 singlePlayerBtn.addEventListener('click', () => {
@@ -59,6 +78,45 @@ backToMenuBtn.addEventListener('click', () => {
     modeButtons.style.display = 'flex';
     roomSection.style.display = 'none';
 });
+
+// High Scores Page
+highScoresBtn.addEventListener('click', async () => {
+    await loadHighScores();
+    homeScreen.style.display = 'none';
+    highScoresScreen.style.display = 'flex';
+});
+
+backFromScoresBtn.addEventListener('click', () => {
+    highScoresScreen.style.display = 'none';
+    homeScreen.style.display = 'flex';
+});
+
+async function loadHighScores() {
+    try {
+        const response = await fetch('/api/highscores');
+        const scores = await response.json();
+
+        scoresBody.innerHTML = '';
+        if (scores.length === 0) {
+            scoresBody.innerHTML = '<tr><td colspan="4" style="color: #888;">No scores yet. Be the first!</td></tr>';
+            return;
+        }
+
+        scores.forEach((score, index) => {
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td>${index + 1}</td>
+                <td>${escapeHtml(score.name)}</td>
+                <td>${score.score}</td>
+                <td>${score.phase}</td>
+            `;
+            scoresBody.appendChild(row);
+        });
+    } catch (err) {
+        console.error('Error loading high scores:', err);
+        scoresBody.innerHTML = '<tr><td colspan="4" style="color: #e74c3c;">Error loading scores</td></tr>';
+    }
+}
 
 // Create room
 createRoomBtn.addEventListener('click', () => {
@@ -172,6 +230,7 @@ socket.on('playerCount', (count) => {
 
 // Phase change handling
 socket.on('phaseChange', (data) => {
+    currentPhase = data.phase;
     phaseDisplay.textContent = `Phase ${data.phase}`;
 
     // Add phase announcement to chat
@@ -820,11 +879,78 @@ function draw() {
         ctx.textAlign = 'center';
         ctx.fillText('YOU DIED', canvas.width / 2, canvas.height / 2);
 
-        restartBtn.style.display = 'block';
+        // Show game over screen (only once)
+        if (!isDead) {
+            isDead = true;
+            showGameOverScreen();
+        }
     } else {
         restartBtn.style.display = 'none';
     }
 }
+
+function showGameOverScreen() {
+    finalScoreDisplay.textContent = `Score: ${myScore}`;
+    finalPhaseDisplay.textContent = `Phase Reached: ${currentPhase}`;
+
+    // Reset submission UI
+    submitScoreSection.style.display = 'block';
+    scoreSubmittedText.style.display = 'none';
+    scoreSubmitted = false;
+
+    gameOverScreen.style.display = 'flex';
+}
+
+// Submit score handler
+submitScoreBtn.addEventListener('click', async () => {
+    if (scoreSubmitted) return;
+
+    try {
+        const response = await fetch('/api/highscores', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                name: myName,
+                score: myScore,
+                phase: currentPhase
+            })
+        });
+
+        if (response.ok) {
+            scoreSubmitted = true;
+            submitScoreSection.style.display = 'none';
+            scoreSubmittedText.style.display = 'block';
+        } else {
+            alert('Failed to submit score. Please try again.');
+        }
+    } catch (err) {
+        console.error('Error submitting score:', err);
+        alert('Failed to submit score. Please try again.');
+    }
+});
+
+// Play Again handler
+playAgainBtn.addEventListener('click', () => {
+    gameOverScreen.style.display = 'none';
+    isDead = false;
+    myScore = 0;
+    currentPhase = 1;
+    socket.emit('restart');
+});
+
+// Main Menu handler
+mainMenuBtn.addEventListener('click', () => {
+    gameOverScreen.style.display = 'none';
+    gameScreen.style.display = 'none';
+    homeScreen.style.display = 'flex';
+    isDead = false;
+    gameJoined = false;
+    myScore = 0;
+    currentPhase = 1;
+    // Reset displays
+    scoreDisplay.textContent = 'Score: 0';
+    phaseDisplay.textContent = 'Phase 1';
+});
 
 function gameLoop() {
     update();
