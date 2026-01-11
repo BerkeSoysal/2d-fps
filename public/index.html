@@ -18,7 +18,6 @@
                 <button id="singlePlayerBtn">🎮 Single Player</button>
                 <button id="multiPlayerBtn">👥 Multiplayer</button>
             </div>
-            <button id="highScoresBtn">🏆 High Scores</button>
 
             <!-- Room List (shown in multiplayer mode) -->
             <div id="roomSection" style="display: none;">
@@ -55,9 +54,6 @@
         <!-- Phase Display -->
         <div id="phaseDisplay">Phase 1</div>
 
-        <!-- Score Display -->
-        <div id="scoreDisplay">Score: 0</div>
-
         <!-- Chat Box -->
         <div id="chatBox">
             <div id="chatMessages"></div>
@@ -70,45 +66,6 @@
             <button id="restartBtn">Restart Game</button>
         </div>
         <canvas id="gameCanvas"></canvas>
-    </div>
-
-    <!-- GAME OVER SCREEN -->
-    <div id="gameOverScreen" style="display: none;">
-        <div id="gameOverContent">
-            <h1 id="gameOverTitle">💀 GAME OVER</h1>
-            <p id="finalScore">Score: 0</p>
-            <p id="finalPhase">Phase Reached: 1</p>
-            <div id="submitScoreSection">
-                <p>Submit your score to the leaderboard?</p>
-                <button id="submitScoreBtn">✅ Submit Score</button>
-            </div>
-            <p id="scoreSubmitted" style="display: none; color: #2ecc71;">✓ Score Submitted!</p>
-            <div id="gameOverButtons">
-                <button id="playAgainBtn">🔄 Play Again</button>
-                <button id="mainMenuBtn">🏠 Main Menu</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- HIGH SCORES SCREEN -->
-    <div id="highScoresScreen" style="display: none;">
-        <div id="highScoresContent">
-            <h1>🏆 High Scores</h1>
-            <table id="scoresTable">
-                <thead>
-                    <tr>
-                        <th>#</th>
-                        <th>Name</th>
-                        <th>Score</th>
-                        <th>Phase</th>
-                    </tr>
-                </thead>
-                <tbody id="scoresBody">
-                    <!-- Scores will be populated here -->
-                </tbody>
-            </table>
-            <button id="backFromScoresBtn">← Back to Menu</button>
-        </div>
     </div>
 
     <script src="/socket.io/socket.io.js"></script>

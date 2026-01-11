@@ -31,30 +31,11 @@ const leaveRoomBtn = document.getElementById('leaveRoomBtn');
 const waitingText = document.getElementById('waitingText');
 const roomNameDisplay = document.getElementById('roomName');
 
-// Game Over elements
-const gameOverScreen = document.getElementById('gameOverScreen');
-const finalScoreDisplay = document.getElementById('finalScore');
-const finalPhaseDisplay = document.getElementById('finalPhase');
-const submitScoreBtn = document.getElementById('submitScoreBtn');
-const submitScoreSection = document.getElementById('submitScoreSection');
-const scoreSubmittedText = document.getElementById('scoreSubmitted');
-const playAgainBtn = document.getElementById('playAgainBtn');
-const mainMenuBtn = document.getElementById('mainMenuBtn');
-
-// High Scores elements
-const highScoresScreen = document.getElementById('highScoresScreen');
-const highScoresBtn = document.getElementById('highScoresBtn');
-const scoresBody = document.getElementById('scoresBody');
-const backFromScoresBtn = document.getElementById('backFromScoresBtn');
-
 // Game state
 let myName = '';
 let gameJoined = false;
 let currentRoomId = null;
 let isHost = false;
-let isDead = false;
-let currentPhase = 1;
-let scoreSubmitted = false;
 
 // Single Player
 singlePlayerBtn.addEventListener('click', () => {
@@ -78,45 +59,6 @@ backToMenuBtn.addEventListener('click', () => {
     modeButtons.style.display = 'flex';
     roomSection.style.display = 'none';
 });
-
-// High Scores Page
-highScoresBtn.addEventListener('click', async () => {
-    await loadHighScores();
-    homeScreen.style.display = 'none';
-    highScoresScreen.style.display = 'flex';
-});
-
-backFromScoresBtn.addEventListener('click', () => {
-    highScoresScreen.style.display = 'none';
-    homeScreen.style.display = 'flex';
-});
-
-async function loadHighScores() {
-    try {
-        const response = await fetch('/api/highscores');
-        const scores = await response.json();
-
-        scoresBody.innerHTML = '';
-        if (scores.length === 0) {
-            scoresBody.innerHTML = '<tr><td colspan="4" style="color: #888;">No scores yet. Be the first!</td></tr>';
-            return;
-        }
-
-        scores.forEach((score, index) => {
-            const row = document.createElement('tr');
-            row.innerHTML = `
-                <td>${index + 1}</td>
-                <td>${escapeHtml(score.name)}</td>
-                <td>${score.score}</td>
-                <td>${score.phase}</td>
-            `;
-            scoresBody.appendChild(row);
-        });
-    } catch (err) {
-        console.error('Error loading high scores:', err);
-        scoresBody.innerHTML = '<tr><td colspan="4" style="color: #e74c3c;">Error loading scores</td></tr>';
-    }
-}
 
 // Create room
 createRoomBtn.addEventListener('click', () => {
@@ -221,7 +163,6 @@ leaveRoomBtn.addEventListener('click', () => {
 // Game screen elements
 const playerCountDisplay = document.getElementById('playerCount');
 const phaseDisplay = document.getElementById('phaseDisplay');
-const scoreDisplay = document.getElementById('scoreDisplay');
 
 // Player count update
 socket.on('playerCount', (count) => {
@@ -230,7 +171,6 @@ socket.on('playerCount', (count) => {
 
 // Phase change handling
 socket.on('phaseChange', (data) => {
-    currentPhase = data.phase;
     phaseDisplay.textContent = `Phase ${data.phase}`;
 
     // Add phase announcement to chat
@@ -329,35 +269,16 @@ window.addEventListener('mousemove', (e) => {
     mouse.y = e.clientY;
 });
 
-// Auto-fire support
-let isMouseDown = false;
-let autoFireInterval = null;
-
 window.addEventListener('mousedown', (e) => {
     if (!gameJoined) return;
-    // Only shoot if we are not clicking the restart button
-    if (e.target.id !== 'restartBtn' && e.target.id !== 'joinBtn') {
-        isMouseDown = true;
+    // Don't shoot if clicking any button or the game over/high scores screens are showing
+    const isButton = e.target.tagName === 'BUTTON' || e.target.closest('button');
+    const isInput = e.target.tagName === 'INPUT';
+    const isOverlay = gameOverScreen.style.display === 'flex' || highScoresScreen.style.display === 'flex';
+
+    if (!isButton && !isInput && !isOverlay) {
         socket.emit('shoot');
         playSound('shoot');
-
-        // Auto-fire for machine gun
-        if (currentWeapon === 'machine_gun') {
-            autoFireInterval = setInterval(() => {
-                if (isMouseDown && currentWeapon === 'machine_gun') {
-                    socket.emit('shoot');
-                    playSound('shoot');
-                }
-            }, 100); // Fire every 100ms
-        }
-    }
-});
-
-window.addEventListener('mouseup', () => {
-    isMouseDown = false;
-    if (autoFireInterval) {
-        clearInterval(autoFireInterval);
-        autoFireInterval = null;
     }
 });
 
@@ -371,12 +292,9 @@ restartBtn.addEventListener('click', () => {
 let players = {};
 let projectiles = [];
 let zombies = [];
-let items = [];
 let walls = [];
 let floors = [];
 let flashOpacity = 0;
-let currentWeapon = 'pistol';
-let myScore = 0;
 
 // Blood splatter particles
 let bloodSplatters = [];
@@ -422,7 +340,7 @@ playerSkins.robot1.src = 'kenney_top-down-shooter/PNG/Robot 1/robot1_gun.png';
 playerSkins.soldier1.src = 'kenney_top-down-shooter/PNG/Soldier 1/soldier1_gun.png';
 playerSkins.survivor1.src = 'kenney_top-down-shooter/PNG/Survivor 1/survivor1_gun.png';
 playerSkins.womanGreen.src = 'kenney_top-down-shooter/PNG/Woman Green/womanGreen_gun.png';
-playerSkins.zombie1.src = 'kenney_top-down-shooter/PNG/Zombie 1/zoimbie1_stand.png';
+playerSkins.zombie1.src = 'kenney_top-down-shooter/PNG/Zombie 1/zoimbie1_gun.png';
 
 const grassImg = new Image();
 grassImg.src = 'kenney_top-down-shooter/PNG/Tiles/tile_01.png';
@@ -456,16 +374,6 @@ decorationTiles.plant.src = 'kenney_top-down-shooter/PNG/Tiles/tile_183.png';
 decorationTiles.bush.src = 'kenney_top-down-shooter/PNG/Tiles/tile_183.png';
 decorationTiles.crate.src = 'kenney_top-down-shooter/PNG/Tiles/tile_129.png';
 
-// Item sprites
-const itemSprites = {
-    machine_gun: new Image(),
-    shotgun: new Image(),
-    health: new Image()
-};
-itemSprites.machine_gun.src = 'kenney_top-down-shooter/PNG/weapon_machine.png';
-itemSprites.shotgun.src = 'kenney_top-down-shooter/PNG/weapon_silencer.png';
-itemSprites.health.src = 'kenney_top-down-shooter/PNG/Tiles/tile_129.png'; // Crate for health
-
 let decorations = [];
 
 socket.on('mapData', (data) => {
@@ -478,19 +386,6 @@ socket.on('stateUpdate', (state) => {
     players = state.players;
     projectiles = state.projectiles;
     zombies = state.zombies || [];
-    items = state.items || [];
-
-    // Update my score and weapon from server state
-    const myPlayer = players[socket.id];
-    if (myPlayer) {
-        myScore = myPlayer.score || 0;
-        currentWeapon = myPlayer.weapon || 'pistol';
-
-        // Update score display
-        if (scoreDisplay) {
-            scoreDisplay.textContent = `Score: ${myScore}`;
-        }
-    }
 });
 
 // Handle zombie death - create blood splatter
@@ -504,29 +399,6 @@ socket.on('zombieDeath', (data) => {
             createdAt: Date.now()
         });
     }
-});
-
-// Handle weapon pickup
-socket.on('weaponPickup', (data) => {
-    currentWeapon = data.weapon;
-    const weaponName = data.weapon === 'machine_gun' ? 'Machine Gun' : 'Shotgun';
-
-    // Show pickup message
-    const msgDiv = document.createElement('div');
-    msgDiv.className = 'chatMessage system';
-    msgDiv.innerHTML = `🔫 Picked up ${weaponName}!`;
-    chatMessages.appendChild(msgDiv);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-});
-
-// Handle heal
-socket.on('heal', (data) => {
-    // Show heal message
-    const msgDiv = document.createElement('div');
-    msgDiv.className = 'chatMessage system';
-    msgDiv.innerHTML = `💚 +20 HP (${data.hp}/100)`;
-    chatMessages.appendChild(msgDiv);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
 });
 
 // Audio System
@@ -738,30 +610,6 @@ function draw() {
         }
     }
 
-    // Draw Items
-    for (const item of items) {
-        const sprite = itemSprites[item.type];
-        if (sprite && sprite.complete) {
-            // Draw a glowing circle under the item
-            ctx.fillStyle = item.type === 'health' ? 'rgba(0, 255, 100, 0.3)' : 'rgba(255, 200, 0, 0.3)';
-            ctx.beginPath();
-            ctx.arc(item.x, item.y, 30, 0, Math.PI * 2);
-            ctx.fill();
-
-            // Draw the sprite
-            const size = 40;
-            ctx.drawImage(sprite, item.x - size / 2, item.y - size / 2, size, size);
-
-            // Draw label
-            ctx.fillStyle = '#fff';
-            ctx.font = 'bold 10px Arial';
-            ctx.textAlign = 'center';
-            const label = item.type === 'machine_gun' ? 'MACHINE GUN' :
-                item.type === 'shotgun' ? 'SHOTGUN' : 'HEALTH';
-            ctx.fillText(label, item.x, item.y + 30);
-        }
-    }
-
     // Draw Zombies
     const zombieSprite = playerSkins.zombie1;
     for (const zombie of zombies) {
@@ -879,78 +727,11 @@ function draw() {
         ctx.textAlign = 'center';
         ctx.fillText('YOU DIED', canvas.width / 2, canvas.height / 2);
 
-        // Show game over screen (only once)
-        if (!isDead) {
-            isDead = true;
-            showGameOverScreen();
-        }
+        restartBtn.style.display = 'block';
     } else {
         restartBtn.style.display = 'none';
     }
 }
-
-function showGameOverScreen() {
-    finalScoreDisplay.textContent = `Score: ${myScore}`;
-    finalPhaseDisplay.textContent = `Phase Reached: ${currentPhase}`;
-
-    // Reset submission UI
-    submitScoreSection.style.display = 'block';
-    scoreSubmittedText.style.display = 'none';
-    scoreSubmitted = false;
-
-    gameOverScreen.style.display = 'flex';
-}
-
-// Submit score handler
-submitScoreBtn.addEventListener('click', async () => {
-    if (scoreSubmitted) return;
-
-    try {
-        const response = await fetch('/api/highscores', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                name: myName,
-                score: myScore,
-                phase: currentPhase
-            })
-        });
-
-        if (response.ok) {
-            scoreSubmitted = true;
-            submitScoreSection.style.display = 'none';
-            scoreSubmittedText.style.display = 'block';
-        } else {
-            alert('Failed to submit score. Please try again.');
-        }
-    } catch (err) {
-        console.error('Error submitting score:', err);
-        alert('Failed to submit score. Please try again.');
-    }
-});
-
-// Play Again handler
-playAgainBtn.addEventListener('click', () => {
-    gameOverScreen.style.display = 'none';
-    isDead = false;
-    myScore = 0;
-    currentPhase = 1;
-    socket.emit('restart');
-});
-
-// Main Menu handler
-mainMenuBtn.addEventListener('click', () => {
-    gameOverScreen.style.display = 'none';
-    gameScreen.style.display = 'none';
-    homeScreen.style.display = 'flex';
-    isDead = false;
-    gameJoined = false;
-    myScore = 0;
-    currentPhase = 1;
-    // Reset displays
-    scoreDisplay.textContent = 'Score: 0';
-    phaseDisplay.textContent = 'Phase 1';
-});
 
 function gameLoop() {
     update();
