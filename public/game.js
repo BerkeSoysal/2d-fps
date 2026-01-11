@@ -128,6 +128,7 @@ window.addEventListener('mousedown', (e) => {
     // Only shoot if we are not clicking the restart button
     if (e.target.id !== 'restartBtn' && e.target.id !== 'joinBtn') {
         socket.emit('shoot');
+        playSound('shoot');
     }
 });
 
@@ -243,6 +244,40 @@ function playSound(type) {
     if (audioCtx.state === 'suspended') {
         audioCtx.resume();
     }
+
+    if (type === 'shoot') {
+        // Gunshot sound - short noise burst
+        const bufferSize = audioCtx.sampleRate * 0.1; // 100ms
+        const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+        const data = buffer.getChannelData(0);
+
+        for (let i = 0; i < bufferSize; i++) {
+            // White noise with decay
+            data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufferSize, 3);
+        }
+
+        const noise = audioCtx.createBufferSource();
+        noise.buffer = buffer;
+
+        const gainNode = audioCtx.createGain();
+        gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+
+        // Low pass filter for more punch
+        const filter = audioCtx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.setValueAtTime(2000, audioCtx.currentTime);
+        filter.frequency.exponentialRampToValueAtTime(500, audioCtx.currentTime + 0.1);
+
+        noise.connect(filter);
+        filter.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+
+        noise.start();
+        noise.stop(audioCtx.currentTime + 0.1);
+        return;
+    }
+
     const osc = audioCtx.createOscillator();
     const gainNode = audioCtx.createGain();
 
