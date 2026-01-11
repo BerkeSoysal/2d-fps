@@ -32,6 +32,7 @@ const CANVAS_HEIGHT = 1200;
 // Zombie spawning settings
 const ZOMBIE_SPAWN_INTERVAL = 3000; // Spawn every 3 seconds
 const ZOMBIE_HP = 30;
+const ZOMBIE_SIGHT_RADIUS = 400; // How far zombies can see
 let zombieIdCounter = 0;
 
 // Available player skins (removed zombie1)
@@ -145,6 +146,30 @@ function checkDecorationCollision(x, y, radius = 15) {
     }
   }
   return false;
+}
+
+// Raycast to check if zombie can see a player (not blocked by walls)
+function canSeePlayer(zombie, player) {
+  const dx = player.x - zombie.x;
+  const dy = player.y - zombie.y;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+
+  // Too far to see
+  if (dist > ZOMBIE_SIGHT_RADIUS) return false;
+
+  // Step along the ray and check for wall collisions
+  const steps = Math.floor(dist / 20);
+  for (let i = 1; i < steps; i++) {
+    const t = i / steps;
+    const x = zombie.x + dx * t;
+    const y = zombie.y + dy * t;
+
+    // Check if this point is inside a wall
+    if (checkWallCollision(x, y, 2)) {
+      return false; // Wall blocks vision
+    }
+  }
+  return true; // Can see the player
 }
 
 io.on('connection', (socket) => {
@@ -353,58 +378,84 @@ setInterval(() => {
   // Move zombies towards their target player
   const playerIds = Object.keys(players).filter(id => players[id].hp > 0);
   for (const zombie of zombies) {
-    // If no target or target is dead, pick new random player
-    if (!zombie.targetId || !players[zombie.targetId] || players[zombie.targetId].hp <= 0) {
-      if (playerIds.length > 0) {
+    // Find a visible player to chase
+    let visibleTarget = null;
+
+    // First check current target
+    if (zombie.targetId && players[zombie.targetId] && players[zombie.targetId].hp > 0) {
+      if (canSeePlayer(zombie, players[zombie.targetId])) {
+        visibleTarget = players[zombie.targetId];
+      }
+    }
+
+    // If current target not visible, look for any visible player
+    if (!visibleTarget) {
+      for (const id of playerIds) {
+        if (canSeePlayer(zombie, players[id])) {
+          visibleTarget = players[id];
+          zombie.targetId = id;
+          break;
+        }
+      }
+    }
+
+    if (visibleTarget) {
+      // Can see a player - chase them!
+      const dx = visibleTarget.x - zombie.x;
+      const dy = visibleTarget.y - zombie.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      if (dist > 0) {
+        zombie.x += (dx / dist) * ZOMBIE_SPEED;
+        zombie.y += (dy / dist) * ZOMBIE_SPEED;
+        zombie.angle = Math.atan2(dy, dx);
+      }
+      zombie.wandering = false;
+    } else {
+      // Can't see anyone - wander randomly
+      if (!zombie.wandering || Math.random() < 0.02) {
+        // Pick a new random direction occasionally
+        zombie.wanderAngle = Math.random() * Math.PI * 2;
+        zombie.wandering = true;
+      }
+
+      zombie.x += Math.cos(zombie.wanderAngle) * ZOMBIE_SPEED * 0.5;
+      zombie.y += Math.sin(zombie.wanderAngle) * ZOMBIE_SPEED * 0.5;
+      zombie.angle = zombie.wanderAngle;
+
+      // Bounce off map edges
+      if (zombie.x < 0 || zombie.x > CANVAS_WIDTH) zombie.wanderAngle = Math.PI - zombie.wanderAngle;
+      if (zombie.y < 0 || zombie.y > CANVAS_HEIGHT) zombie.wanderAngle = -zombie.wanderAngle;
+      zombie.x = Math.max(0, Math.min(CANVAS_WIDTH, zombie.x));
+      zombie.y = Math.max(0, Math.min(CANVAS_HEIGHT, zombie.y));
+    }
+
+    // Check if zombie reached player (for damage)
+    const target = visibleTarget || (zombie.targetId && players[zombie.targetId]);
+    if (target && target.hp > 0) {
+      const dx = target.x - zombie.x;
+      const dy = target.y - zombie.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < 25) {
+        target.hp -= 10;
+        io.to(zombie.targetId).emit('hurt');
+
+        // Push zombie back a bit
+        zombie.x -= (dx / dist) * 30;
+        zombie.y -= (dy / dist) * 30;
+
+        // Pick a new target
         zombie.targetId = playerIds[Math.floor(Math.random() * playerIds.length)];
-      } else {
-        continue;
-      }
-    }
 
-    const target = players[zombie.targetId];
-    if (!target) continue;
-
-    // Move towards target
-    const dx = target.x - zombie.x;
-    const dy = target.y - zombie.y;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-
-    if (dist > 0) {
-      const newX = zombie.x + (dx / dist) * ZOMBIE_SPEED;
-      const newY = zombie.y + (dy / dist) * ZOMBIE_SPEED;
-
-      // Check collision before moving (same as players)
-      if (!checkWallCollision(newX, zombie.y, 15) && !checkDecorationCollision(newX, zombie.y, 12)) {
-        zombie.x = newX;
-      }
-      if (!checkWallCollision(zombie.x, newY, 15) && !checkDecorationCollision(zombie.x, newY, 12)) {
-        zombie.y = newY;
-      }
-
-      zombie.angle = Math.atan2(dy, dx);
-    }
-
-    // Check if zombie reached player
-    if (dist < 25) {
-      target.hp -= 10;
-      io.to(zombie.targetId).emit('hurt');
-
-      // Push zombie back a bit
-      zombie.x -= (dx / dist) * 30;
-      zombie.y -= (dy / dist) * 30;
-
-      // Pick a new target
-      zombie.targetId = playerIds[Math.floor(Math.random() * playerIds.length)];
-
-      if (target.hp <= 0) {
-        target.hp = 0;
-        io.emit('playerDeath', {
-          x: target.x,
-          y: target.y,
-          killerName: '🧟 Zombie',
-          victimName: target.name
-        });
+        if (target.hp <= 0) {
+          target.hp = 0;
+          io.emit('playerDeath', {
+            x: target.x,
+            y: target.y,
+            killerName: '🧟 Zombie',
+            victimName: target.name
+          });
+        }
       }
     }
   }
