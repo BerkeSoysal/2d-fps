@@ -371,8 +371,17 @@ setInterval(() => {
     const dist = Math.sqrt(dx * dx + dy * dy);
 
     if (dist > 0) {
-      zombie.x += (dx / dist) * ZOMBIE_SPEED;
-      zombie.y += (dy / dist) * ZOMBIE_SPEED;
+      const newX = zombie.x + (dx / dist) * ZOMBIE_SPEED;
+      const newY = zombie.y + (dy / dist) * ZOMBIE_SPEED;
+
+      // Check collision before moving (same as players)
+      if (!checkWallCollision(newX, zombie.y, 15) && !checkDecorationCollision(newX, zombie.y, 12)) {
+        zombie.x = newX;
+      }
+      if (!checkWallCollision(zombie.x, newY, 15) && !checkDecorationCollision(zombie.x, newY, 12)) {
+        zombie.y = newY;
+      }
+
       zombie.angle = Math.atan2(dy, dx);
     }
 
