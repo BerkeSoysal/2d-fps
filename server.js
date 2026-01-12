@@ -169,7 +169,9 @@ function getRoomsList() {
 
 // Game Logic Helpers
 function getPhaseZombieCount(phase) {
-  return phase * 10;
+  // More zombies: starts at 15, increases by 12 per phase
+  // Phase 1: 15, Phase 2: 27, Phase 3: 39, etc.
+  return 15 + (phase - 1) * 12;
 }
 
 function getZombieSpeed(phase) {

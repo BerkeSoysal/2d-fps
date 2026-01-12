@@ -1305,6 +1305,74 @@ function draw() {
 
     ctx.restore();
 
+    // Off-screen zombie indicators
+    const myPlayerForIndicators = players[socket.id];
+    if (myPlayerForIndicators && myPlayerForIndicators.hp > 0) {
+        const screenCenterX = canvas.width / 2;
+        const screenCenterY = canvas.height / 2;
+        const edgePadding = 50; // Distance from screen edge
+
+        for (const zombie of zombies) {
+            // Convert zombie world position to screen position relative to player
+            const zombieScreenX = zombie.x - myPlayerForIndicators.x + screenCenterX;
+            const zombieScreenY = zombie.y - myPlayerForIndicators.y + screenCenterY;
+
+            // Check if zombie is off-screen
+            const isOffScreen = zombieScreenX < -20 || zombieScreenX > canvas.width + 20 ||
+                                zombieScreenY < -20 || zombieScreenY > canvas.height + 20;
+
+            if (isOffScreen) {
+                // Calculate angle from center to zombie
+                const dx = zombieScreenX - screenCenterX;
+                const dy = zombieScreenY - screenCenterY;
+                const angle = Math.atan2(dy, dx);
+
+                // Calculate indicator position at screen edge
+                let indicatorX, indicatorY;
+
+                // Find intersection with screen edge
+                const halfWidth = canvas.width / 2 - edgePadding;
+                const halfHeight = canvas.height / 2 - edgePadding;
+
+                const cos = Math.cos(angle);
+                const sin = Math.sin(angle);
+
+                // Check which edge the line intersects
+                const tX = cos !== 0 ? Math.abs(halfWidth / cos) : Infinity;
+                const tY = sin !== 0 ? Math.abs(halfHeight / sin) : Infinity;
+                const t = Math.min(tX, tY);
+
+                indicatorX = screenCenterX + cos * t;
+                indicatorY = screenCenterY + sin * t;
+
+                // Clamp to screen bounds
+                indicatorX = Math.max(edgePadding, Math.min(canvas.width - edgePadding, indicatorX));
+                indicatorY = Math.max(edgePadding, Math.min(canvas.height - edgePadding, indicatorY));
+
+                // Draw red triangle pointing toward zombie
+                ctx.save();
+                ctx.translate(indicatorX, indicatorY);
+                ctx.rotate(angle);
+
+                // Triangle shape
+                ctx.beginPath();
+                ctx.moveTo(15, 0);      // Point
+                ctx.lineTo(-8, -10);    // Top back
+                ctx.lineTo(-8, 10);     // Bottom back
+                ctx.closePath();
+
+                // Fill with gradient for better visibility
+                ctx.fillStyle = 'rgba(231, 76, 60, 0.9)';
+                ctx.fill();
+                ctx.strokeStyle = '#c0392b';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                ctx.restore();
+            }
+        }
+    }
+
     // Damage Flash Effect
     if (flashOpacity > 0) {
         ctx.fillStyle = `rgba(255, 0, 0, ${flashOpacity})`;
