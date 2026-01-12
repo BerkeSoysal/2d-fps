@@ -47,6 +47,13 @@ const highScoresBtn = document.getElementById('highScoresBtn');
 const scoresBody = document.getElementById('scoresBody');
 const backFromScoresBtn = document.getElementById('backFromScoresBtn');
 
+// Pause screen elements
+const pauseScreen = document.getElementById('pauseScreen');
+const pauseMessage = document.getElementById('pauseMessage');
+const resumeBtn = document.getElementById('resumeBtn');
+const pauseRestartBtn = document.getElementById('pauseRestartBtn');
+const pauseMainMenuBtn = document.getElementById('pauseMainMenuBtn');
+
 // Game state
 let myName = '';
 let gameJoined = false;
@@ -56,10 +63,13 @@ let isDead = false;
 let currentPhase = 1;
 let scoreSubmitted = false;
 let myAmmo = 0;
+let isSinglePlayer = false;
+let isPaused = false;
 
 // Single Player
 singlePlayerBtn.addEventListener('click', () => {
     myName = playerNameInput.value.trim() || 'Player';
+    isSinglePlayer = true;
     socket.emit('startSinglePlayer', { playerName: myName });
 });
 
@@ -70,6 +80,7 @@ multiPlayerBtn.addEventListener('click', () => {
         alert('Please enter your name first!');
         return;
     }
+    isSinglePlayer = false;
     modeButtons.style.display = 'none';
     roomSection.style.display = 'block';
     socket.emit('getRooms');
@@ -338,6 +349,52 @@ window.addEventListener('keyup', (e) => {
     if (e.key === 'd') keys.d = false;
 });
 
+// ESC key for pause menu
+window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && gameJoined && !isDead) {
+        e.preventDefault();
+        if (isPaused) {
+            // Only host/single player can unpause
+            if (isSinglePlayer || isHost) {
+                socket.emit('resumeGame');
+            }
+        } else {
+            // Show pause menu
+            showPauseMenu();
+        }
+    }
+});
+
+function showPauseMenu() {
+    if (isSinglePlayer) {
+        // Single player - pause game
+        socket.emit('pauseGame');
+        pauseMessage.textContent = 'Game Paused';
+        resumeBtn.style.display = 'block';
+        pauseRestartBtn.style.display = 'block';
+    } else if (isHost) {
+        // Multiplayer host - pause game for everyone
+        socket.emit('pauseGame');
+        pauseMessage.textContent = 'Game Paused (All Players)';
+        resumeBtn.style.display = 'block';
+        pauseRestartBtn.style.display = 'none'; // No restart in multiplayer
+    } else {
+        // Multiplayer joiner - just show menu, no pause
+        pauseMessage.textContent = 'Menu (Game continues)';
+        resumeBtn.style.display = 'block';
+        resumeBtn.textContent = '▶️ Close Menu';
+        pauseRestartBtn.style.display = 'none';
+    }
+    pauseScreen.style.display = 'flex';
+    isPaused = true;
+}
+
+function hidePauseMenu() {
+    pauseScreen.style.display = 'none';
+    isPaused = false;
+    resumeBtn.textContent = '▶️ Resume'; // Reset text
+}
+
 window.addEventListener('mousemove', (e) => {
     mouse.x = e.clientX;
     mouse.y = e.clientY;
@@ -349,8 +406,9 @@ let autoFireInterval = null;
 
 window.addEventListener('mousedown', (e) => {
     if (!gameJoined) return;
-    // Don't shoot if game over screen is visible or clicking UI buttons
+    // Don't shoot if game over screen or pause screen is visible or clicking UI buttons
     if (gameOverScreen.style.display !== 'none') return;
+    if (pauseScreen.style.display !== 'none') return;
     if (e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT') return;
 
     isMouseDown = true;
@@ -821,6 +879,75 @@ socket.on('heal', (data) => {
     chatMessages.scrollTop = chatMessages.scrollHeight;
 });
 
+// Handle game paused (from server/host)
+socket.on('gamePaused', (data) => {
+    isPaused = true;
+    if (!isSinglePlayer && data.pausedBy !== socket.id) {
+        // Another player (host) paused the game
+        pauseMessage.textContent = 'Game Paused by Host';
+        resumeBtn.style.display = 'none';
+        pauseRestartBtn.style.display = 'none';
+        pauseMainMenuBtn.style.display = 'block';
+        pauseScreen.style.display = 'flex';
+    }
+});
+
+// Handle game resumed
+socket.on('gameResumed', () => {
+    hidePauseMenu();
+});
+
+// Pause menu button handlers
+resumeBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (isSinglePlayer || isHost) {
+        socket.emit('resumeGame');
+    } else {
+        // For joiners, just close the menu
+        hidePauseMenu();
+    }
+});
+
+pauseRestartBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    hidePauseMenu();
+    socket.emit('resumeGame');
+    socket.emit('restart');
+});
+
+pauseMainMenuBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    hidePauseMenu();
+    if (isSinglePlayer || isHost) {
+        socket.emit('resumeGame');
+    }
+    socket.emit('leaveRoom');
+
+    // Reset Client State
+    gameScreen.style.display = 'none';
+    homeScreen.style.display = 'flex';
+    modeButtons.style.display = 'flex';
+    roomSection.style.display = 'none';
+
+    currentRoomId = null;
+    gameJoined = false;
+    isDead = false;
+    isHost = false;
+    myScore = 0;
+    currentPhase = 1;
+    currentWeapon = 'pistol';
+    myAmmo = 0;
+    players = {};
+    items = [];
+    zombies = [];
+    projectiles = [];
+    isSinglePlayer = false;
+
+    scoreDisplay.textContent = 'Score: 0';
+    phaseDisplay.textContent = 'Phase 1';
+    updateWeaponDisplay();
+});
+
 // Audio System
 const AudioContext = window.AudioContext || window.webkitAudioContext;
 const audioCtx = new AudioContext();
@@ -1269,23 +1396,16 @@ playAgainBtn.addEventListener('click', (e) => {
 // Main Menu handler
 mainMenuBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    console.log('Main Menu clicked');
-    console.log('homeScreen:', homeScreen);
-    console.log('gameOverScreen:', gameOverScreen);
-    console.log('gameScreen:', gameScreen);
 
     // Leave room on server
     socket.emit('leaveRoom');
 
     // Reset Client State
     gameOverScreen.style.display = 'none';
-    console.log('gameOverScreen hidden');
     gameScreen.style.display = 'none';
-    console.log('gameScreen hidden');
     homeScreen.style.display = 'flex';
-    console.log('homeScreen shown');
-    modeButtons.style.display = 'flex'; // Ensure modes are visible
-    roomSection.style.display = 'none'; // Hide room list if active
+    modeButtons.style.display = 'flex';
+    roomSection.style.display = 'none';
 
     currentRoomId = null;
     gameJoined = false;
@@ -1295,10 +1415,12 @@ mainMenuBtn.addEventListener('click', (e) => {
     currentPhase = 1;
     currentWeapon = 'pistol';
     myAmmo = 0;
-    players = {}; // Clear player data
-    items = []; // Clear items
+    players = {};
+    items = [];
     zombies = [];
     projectiles = [];
+    isSinglePlayer = false;
+    isPaused = false;
 
     // Reset HUD
     scoreDisplay.textContent = 'Score: 0';
@@ -1320,6 +1442,22 @@ mainMenuBtn.addEventListener('touchend', (e) => {
 submitScoreBtn.addEventListener('touchend', (e) => {
     e.preventDefault();
     submitScoreBtn.click();
+});
+
+// Add touch support for pause buttons
+resumeBtn.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    resumeBtn.click();
+});
+
+pauseRestartBtn.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    pauseRestartBtn.click();
+});
+
+pauseMainMenuBtn.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    pauseMainMenuBtn.click();
 });
 
 function gameLoop() {

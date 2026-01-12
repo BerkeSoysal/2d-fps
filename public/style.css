@@ -546,6 +546,86 @@ canvas {
     box-shadow: 0 5px 20px rgba(241, 196, 15, 0.4);
 }
 
+/* Pause Screen */
+#pauseScreen {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.85);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 2500;
+    touch-action: auto;
+    pointer-events: auto;
+}
+
+#pauseContent {
+    background: linear-gradient(135deg, #2c3e50, #1a252f);
+    padding: 40px 50px;
+    border-radius: 20px;
+    text-align: center;
+    border: 3px solid #3498db;
+    min-width: 350px;
+}
+
+#pauseTitle {
+    color: #3498db;
+    font-size: 2.5em;
+    margin: 0 0 10px 0;
+    font-family: Arial, sans-serif;
+}
+
+#pauseMessage {
+    color: #bbb;
+    font-size: 1.1em;
+    margin-bottom: 25px;
+}
+
+#pauseButtons {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+#pauseButtons button {
+    padding: 14px 30px;
+    font-size: 16px;
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    font-weight: bold;
+    transition: transform 0.2s, opacity 0.2s;
+    pointer-events: auto;
+}
+
+#resumeBtn {
+    background: linear-gradient(135deg, #2ecc71, #27ae60);
+    color: white;
+}
+
+#pauseRestartBtn {
+    background: linear-gradient(135deg, #3498db, #2980b9);
+    color: white;
+}
+
+#pauseMainMenuBtn {
+    background: linear-gradient(135deg, #95a5a6, #7f8c8d);
+    color: white;
+}
+
+#pauseButtons button:hover {
+    transform: scale(1.03);
+}
+
+#pauseButtons button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+}
+
 /* Game Over Screen */
 #gameOverScreen {
     position: fixed;

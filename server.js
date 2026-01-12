@@ -148,7 +148,10 @@ function createRoom(hostId, hostName, roomName, isSinglePlayer = false) {
 
     // Timers
     lastZombieSpawnTime: 0,
-    lastItemSpawnTime: 0
+    lastItemSpawnTime: 0,
+
+    // Pause state
+    isPaused: false
   };
   return rooms[roomId];
 }
@@ -363,6 +366,7 @@ io.on('connection', (socket) => {
 
     io.to(room.id).emit('gameStarted', { roomId: room.id });
     io.to(room.id).emit('updatePlayers', room.players); // Initial sync
+    io.to(room.id).emit('playerCount', room.playerList.length); // Send player count
     io.to(room.id).emit('phaseChange', { phase: 1, message: 'Phase 1 Starting!' });
 
     // Notify lobby that list changed (room now in progress)
@@ -523,6 +527,30 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Pause game
+  socket.on('pauseGame', () => {
+    const room = getPlayerRoom(socket.id);
+    if (!room || !room.inProgress) return;
+
+    // Only host or single player can pause
+    if (room.isSinglePlayer || room.hostId === socket.id) {
+      room.isPaused = true;
+      io.to(room.id).emit('gamePaused', { pausedBy: socket.id, isHost: room.hostId === socket.id });
+    }
+  });
+
+  // Resume game
+  socket.on('resumeGame', () => {
+    const room = getPlayerRoom(socket.id);
+    if (!room || !room.inProgress) return;
+
+    // Only host or single player can resume
+    if (room.isSinglePlayer || room.hostId === socket.id) {
+      room.isPaused = false;
+      io.to(room.id).emit('gameResumed');
+    }
+  });
+
 });
 
 // ==========================================
@@ -534,6 +562,7 @@ setInterval(() => {
   for (const roomId in rooms) {
     const room = rooms[roomId];
     if (!room.inProgress) continue;
+    if (room.isPaused) continue; // Skip updates when paused
 
     updateRoom(room, now);
   }
