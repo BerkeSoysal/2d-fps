@@ -597,20 +597,26 @@ function updateRoom(room, now) {
     if (hitWall) { room.projectiles.splice(i, 1); continue; }
 
     const damage = p.damage || 10;
+    const isZombieProjectile = p.isZombieProjectile || false;
 
-    // Hit Player
+    // Hit Player (zombie projectiles and other player projectiles can hit)
     for (const id in room.players) {
       const player = room.players[id];
-      if (p.ownerId !== id && player.hp > 0) {
+      // Zombie projectiles hit all players, player projectiles hit other players
+      const canHit = isZombieProjectile || p.ownerId !== id;
+      if (canHit && player.hp > 0) {
         const dx = p.x - player.x, dy = p.y - player.y;
         if (Math.sqrt(dx * dx + dy * dy) < 20) {
           player.hp -= damage;
           io.to(id).emit('hurt');
-          io.to(p.ownerId).emit('hit');
+          if (!isZombieProjectile) {
+            io.to(p.ownerId).emit('hit');
+          }
           room.projectiles.splice(i, 1);
           if (player.hp <= 0) {
             player.hp = 0;
-            io.to(room.id).emit('playerDeath', { x: player.x, y: player.y, killerName: room.players[p.ownerId]?.name, victimName: player.name });
+            const killerName = isZombieProjectile ? '🧟 Armed Zombie' : (room.players[p.ownerId]?.name || 'Unknown');
+            io.to(room.id).emit('playerDeath', { x: player.x, y: player.y, killerName: killerName, victimName: player.name });
           }
           break; // Projectile destroyed
         }
@@ -619,22 +625,24 @@ function updateRoom(room, now) {
     // If projectile already hit player, processed in break. If not present (index valid), check zombies.
     if (i >= room.projectiles.length) continue;
 
-    // Hit Zombie
-    for (const zombie of room.zombies) {
-      const dx = p.x - zombie.x, dy = p.y - zombie.y;
-      if (Math.sqrt(dx * dx + dy * dy) < 20) {
-        zombie.hp -= damage;
-        room.projectiles.splice(i, 1);
-        if (zombie.hp <= 0) {
-          io.to(room.id).emit('zombieDeath', { x: zombie.x, y: zombie.y });
-          room.zombiesKilledThisPhase++;
-          // Award 50 points to the player who killed the zombie
-          const killer = room.players[p.ownerId];
-          if (killer) {
-            killer.score += 50;
+    // Hit Zombie (only player projectiles, not zombie projectiles)
+    if (!isZombieProjectile) {
+      for (const zombie of room.zombies) {
+        const dx = p.x - zombie.x, dy = p.y - zombie.y;
+        if (Math.sqrt(dx * dx + dy * dy) < 20) {
+          zombie.hp -= damage;
+          room.projectiles.splice(i, 1);
+          if (zombie.hp <= 0) {
+            io.to(room.id).emit('zombieDeath', { x: zombie.x, y: zombie.y });
+            room.zombiesKilledThisPhase++;
+            // Award 50 points to the player who killed the zombie (75 for armed zombies)
+            const killer = room.players[p.ownerId];
+            if (killer) {
+              killer.score += zombie.weapon ? 75 : 50;
+            }
           }
+          break;
         }
-        break;
       }
     }
   }
@@ -692,9 +700,49 @@ function updateRoom(room, now) {
       }
       zombie.wandering = false;
 
-      // Attack
-      if (dist < 25) {
-        target.hp -= 1; // Damage frame? Or interval? Original was instant but maybe too fast. 
+      // Armed zombie shooting
+      if (zombie.weapon && dist > 50 && dist < 400) {
+        const shootInterval = zombie.weapon === 'machine_gun' ? 300 : (zombie.weapon === 'shotgun' ? 1500 : 800);
+        if (now - zombie.lastShootTime > shootInterval) {
+          zombie.lastShootTime = now;
+
+          // Create projectile(s) based on weapon
+          if (zombie.weapon === 'shotgun') {
+            // Shotgun: 3 pellets with spread
+            for (let i = 0; i < 3; i++) {
+              const spreadAngle = zombie.angle + (Math.random() - 0.5) * 0.6;
+              room.projectiles.push({
+                x: zombie.x, y: zombie.y,
+                vx: Math.cos(spreadAngle) * 12,
+                vy: Math.sin(spreadAngle) * 12,
+                ownerId: zombie.id,
+                isZombieProjectile: true,
+                damage: 15,
+                range: 250,
+                distanceTraveled: 0
+              });
+            }
+          } else {
+            // Pistol or machine gun
+            const spread = zombie.weapon === 'machine_gun' ? 0.15 : 0.05;
+            const spreadAngle = zombie.angle + (Math.random() - 0.5) * spread;
+            room.projectiles.push({
+              x: zombie.x, y: zombie.y,
+              vx: Math.cos(spreadAngle) * 14,
+              vy: Math.sin(spreadAngle) * 14,
+              ownerId: zombie.id,
+              isZombieProjectile: true,
+              damage: zombie.weapon === 'machine_gun' ? 8 : 10,
+              range: zombie.weapon === 'machine_gun' ? 500 : 600,
+              distanceTraveled: 0
+            });
+          }
+        }
+      }
+
+      // Melee Attack (only for unarmed or very close)
+      if (dist < 25 && !zombie.weapon) {
+        target.hp -= 1; // Damage frame? Or interval? Original was instant but maybe too fast.
         // Original code had 10 dmg + pushback.
         // Let's replicate original pushback logic lightly
         target.hp -= 9; // Reduce slightly to avoid insta-kill logic from previous if loop ran fast
@@ -802,11 +850,34 @@ function updateRoom(room, now) {
           case 3: zx = 20; zy = Math.random() * CANVAS_HEIGHT; break;         // Left edge
         }
 
+        // Determine if zombie is armed based on phase
+        let zombieWeapon = null;
+        let zombieHP = ZOMBIE_HP;
+        const phase = room.currentPhase;
+
+        if (phase >= 3) {
+          const armedChance = phase >= 7 ? 0.4 : (phase >= 5 ? 0.3 : 0.2);
+          if (Math.random() < armedChance) {
+            // Pick weapon based on phase
+            if (phase >= 7) {
+              const weapons = ['pistol', 'shotgun', 'machine_gun'];
+              zombieWeapon = weapons[Math.floor(Math.random() * weapons.length)];
+            } else if (phase >= 5) {
+              zombieWeapon = Math.random() < 0.5 ? 'pistol' : 'shotgun';
+            } else {
+              zombieWeapon = 'pistol';
+            }
+            zombieHP = ZOMBIE_HP + 20; // Armed zombies have more HP
+          }
+        }
+
         room.zombies.push({
           id: 'z_' + (++zombieIdCounter),
-          x: zx, y: zy, angle: 0, hp: ZOMBIE_HP,
+          x: zx, y: zy, angle: 0, hp: zombieHP,
           targetId: activePlayers[Math.floor(Math.random() * activePlayers.length)]?.playerId,
-          speed: getZombieSpeed(room.currentPhase)
+          speed: getZombieSpeed(room.currentPhase),
+          weapon: zombieWeapon,
+          lastShootTime: 0
         });
 
         room.zombiesSpawnedThisPhase++;

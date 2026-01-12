@@ -684,6 +684,18 @@ playerSkins.survivor1.src = 'kenney_top-down-shooter/PNG/Survivor 1/survivor1_gu
 playerSkins.womanGreen.src = 'kenney_top-down-shooter/PNG/Woman Green/womanGreen_gun.png';
 playerSkins.zombie1.src = 'kenney_top-down-shooter/PNG/Zombie 1/zoimbie1_stand.png';
 
+// Zombie weapon sprites
+const zombieSprites = {
+    none: new Image(),
+    pistol: new Image(),
+    machine_gun: new Image(),
+    shotgun: new Image()
+};
+zombieSprites.none.src = 'kenney_top-down-shooter/PNG/Zombie 1/zoimbie1_stand.png';
+zombieSprites.pistol.src = 'kenney_top-down-shooter/PNG/Zombie 1/zoimbie1_gun.png';
+zombieSprites.machine_gun.src = 'kenney_top-down-shooter/PNG/Zombie 1/zoimbie1_machine.png';
+zombieSprites.shotgun.src = 'kenney_top-down-shooter/PNG/Zombie 1/zoimbie1_silencer.png';
+
 // Player skins with machine gun
 const playerSkinsMachine = {
     hitman1: new Image(),
@@ -1198,12 +1210,13 @@ function draw() {
     }
 
     // Draw Zombies
-    const zombieSprite = playerSkins.zombie1;
     for (const zombie of zombies) {
         ctx.save();
         ctx.translate(zombie.x, zombie.y);
         ctx.rotate(zombie.angle);
 
+        // Use correct sprite based on weapon
+        const zombieSprite = zombieSprites[zombie.weapon || 'none'] || zombieSprites.none;
         if (zombieSprite && zombieSprite.complete) {
             ctx.drawImage(zombieSprite, -25, -20, 50, 40);
         } else {
@@ -1216,11 +1229,12 @@ function draw() {
 
         ctx.restore();
 
-        // Zombie HP bar
+        // Zombie HP bar (armed zombies have 50 HP, regular have 30)
+        const maxHP = zombie.weapon ? 50 : 30;
         ctx.fillStyle = '#333';
         ctx.fillRect(zombie.x - 15, zombie.y - 30, 30, 4);
-        ctx.fillStyle = '#e74c3c';
-        ctx.fillRect(zombie.x - 15, zombie.y - 30, 30 * (zombie.hp / 30), 4);
+        ctx.fillStyle = zombie.weapon ? '#e67e22' : '#e74c3c'; // Orange for armed, red for regular
+        ctx.fillRect(zombie.x - 15, zombie.y - 30, 30 * (zombie.hp / maxHP), 4);
     }
 
     // Draw Players
@@ -1296,10 +1310,11 @@ function draw() {
     }
 
     // Draw Projectiles
-    ctx.fillStyle = '#fff';
     for (const p of projectiles) {
         ctx.beginPath();
         ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+        // Zombie projectiles are red/orange, player projectiles are white
+        ctx.fillStyle = p.isZombieProjectile ? '#e74c3c' : '#fff';
         ctx.fill();
     }
 
