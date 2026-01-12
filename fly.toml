@@ -2,6 +2,11 @@
 app = "2d-fps"
 primary_region = "ams"
 
+[mounts]
+  source = "data"
+  destination = "/data"
+
+
 [build]
 
 [http_service]
@@ -37,7 +42,3 @@ primary_region = "ams"
   memory = "512mb"
   cpu_kind = "shared"
   cpus = 1
-
-[mounts]
-  source = "data"
-  destination = "/data"
