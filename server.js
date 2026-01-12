@@ -678,8 +678,16 @@ function updateRoom(room, now) {
 
       if (dist > 0) {
         const speed = zombie.speed || ZOMBIE_SPEED;
-        zombie.x += (dx / dist) * speed;
-        zombie.y += (dy / dist) * speed;
+        const newX = zombie.x + (dx / dist) * speed;
+        const newY = zombie.y + (dy / dist) * speed;
+
+        // Check wall collision before moving
+        if (!checkWallCollision(newX, zombie.y, 15)) {
+          zombie.x = newX;
+        }
+        if (!checkWallCollision(zombie.x, newY, 15)) {
+          zombie.y = newY;
+        }
         zombie.angle = Math.atan2(dy, dx);
       }
       zombie.wandering = false;
@@ -707,8 +715,21 @@ function updateRoom(room, now) {
         zombie.wanderAngle = Math.random() * Math.PI * 2;
         zombie.wandering = true;
       }
-      zombie.x += Math.cos(zombie.wanderAngle) * 1;
-      zombie.y += Math.sin(zombie.wanderAngle) * 1;
+
+      const wanderX = zombie.x + Math.cos(zombie.wanderAngle) * 1;
+      const wanderY = zombie.y + Math.sin(zombie.wanderAngle) * 1;
+
+      // Check wall collision for wandering
+      if (!checkWallCollision(wanderX, zombie.y, 15)) {
+        zombie.x = wanderX;
+      } else {
+        zombie.wanderAngle = Math.PI - zombie.wanderAngle; // Bounce off wall
+      }
+      if (!checkWallCollision(zombie.x, wanderY, 15)) {
+        zombie.y = wanderY;
+      } else {
+        zombie.wanderAngle = -zombie.wanderAngle; // Bounce off wall
+      }
       zombie.angle = zombie.wanderAngle;
 
       // Bounds
