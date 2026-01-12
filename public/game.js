@@ -604,7 +604,7 @@ socket.on('playerDeath', (data) => {
     chatMessages.scrollTop = chatMessages.scrollHeight;
 });
 
-// Assets - Player skins
+// Assets - Player skins (pistol)
 const playerSkins = {
     hitman1: new Image(),
     manBlue: new Image(),
@@ -625,6 +625,50 @@ playerSkins.soldier1.src = 'kenney_top-down-shooter/PNG/Soldier 1/soldier1_gun.p
 playerSkins.survivor1.src = 'kenney_top-down-shooter/PNG/Survivor 1/survivor1_gun.png';
 playerSkins.womanGreen.src = 'kenney_top-down-shooter/PNG/Woman Green/womanGreen_gun.png';
 playerSkins.zombie1.src = 'kenney_top-down-shooter/PNG/Zombie 1/zoimbie1_stand.png';
+
+// Player skins with machine gun
+const playerSkinsMachine = {
+    hitman1: new Image(),
+    manBlue: new Image(),
+    manBrown: new Image(),
+    manOld: new Image(),
+    robot1: new Image(),
+    soldier1: new Image(),
+    survivor1: new Image(),
+    womanGreen: new Image()
+};
+playerSkinsMachine.hitman1.src = 'kenney_top-down-shooter/PNG/Hitman 1/hitman1_machine.png';
+playerSkinsMachine.manBlue.src = 'kenney_top-down-shooter/PNG/Man Blue/manBlue_machine.png';
+playerSkinsMachine.manBrown.src = 'kenney_top-down-shooter/PNG/Man Brown/manBrown_machine.png';
+playerSkinsMachine.manOld.src = 'kenney_top-down-shooter/PNG/Man Old/manOld_machine.png';
+playerSkinsMachine.robot1.src = 'kenney_top-down-shooter/PNG/Robot 1/robot1_machine.png';
+playerSkinsMachine.soldier1.src = 'kenney_top-down-shooter/PNG/Soldier 1/soldier1_machine.png';
+playerSkinsMachine.survivor1.src = 'kenney_top-down-shooter/PNG/Survivor 1/survivor1_machine.png';
+playerSkinsMachine.womanGreen.src = 'kenney_top-down-shooter/PNG/Woman Green/womanGreen_machine.png';
+
+// Player skins with shotgun (using silencer sprite)
+const playerSkinsShotgun = {
+    hitman1: new Image(),
+    manBlue: new Image(),
+    manBrown: new Image(),
+    manOld: new Image(),
+    robot1: new Image(),
+    soldier1: new Image(),
+    survivor1: new Image(),
+    womanGreen: new Image()
+};
+playerSkinsShotgun.hitman1.src = 'kenney_top-down-shooter/PNG/Hitman 1/hitman1_silencer.png';
+playerSkinsShotgun.manBlue.src = 'kenney_top-down-shooter/PNG/Man Blue/manBlue_silencer.png';
+playerSkinsShotgun.manBrown.src = 'kenney_top-down-shooter/PNG/Man Brown/manBrown_silencer.png';
+playerSkinsShotgun.manOld.src = 'kenney_top-down-shooter/PNG/Man Old/manOld_silencer.png';
+playerSkinsShotgun.robot1.src = 'kenney_top-down-shooter/PNG/Robot 1/robot1_silencer.png';
+playerSkinsShotgun.soldier1.src = 'kenney_top-down-shooter/PNG/Soldier 1/soldier1_silencer.png';
+playerSkinsShotgun.survivor1.src = 'kenney_top-down-shooter/PNG/Survivor 1/survivor1_silencer.png';
+playerSkinsShotgun.womanGreen.src = 'kenney_top-down-shooter/PNG/Woman Green/womanGreen_silencer.png';
+
+// Item chest sprite
+const chestSprite = new Image();
+chestSprite.src = 'kenney_top-down-shooter/PNG/Tiles/tile_129.png';
 
 const grassImg = new Image();
 grassImg.src = 'kenney_top-down-shooter/PNG/Tiles/tile_01.png';
@@ -772,7 +816,7 @@ socket.on('heal', (data) => {
     // Show heal message
     const msgDiv = document.createElement('div');
     msgDiv.className = 'chatMessage system';
-    msgDiv.innerHTML = `💚 +20 HP (${data.hp}/100)`;
+    msgDiv.innerHTML = `💚 +25 HP (${data.hp}/100)`;
     chatMessages.appendChild(msgDiv);
     chatMessages.scrollTop = chatMessages.scrollHeight;
 });
@@ -993,26 +1037,37 @@ function draw() {
 
     // Draw Items
     for (const item of items) {
-        const sprite = itemSprites[item.type];
-        if (sprite && sprite.complete) {
-            // Draw a glowing circle under the item
-            ctx.fillStyle = item.type === 'health' ? 'rgba(0, 255, 100, 0.3)' : 'rgba(255, 200, 0, 0.3)';
-            ctx.beginPath();
-            ctx.arc(item.x, item.y, 30, 0, Math.PI * 2);
-            ctx.fill();
+        // Draw a glowing circle under the item
+        let glowColor;
+        if (item.type === 'health') glowColor = 'rgba(0, 255, 100, 0.4)';
+        else if (item.type === 'machine_gun') glowColor = 'rgba(255, 165, 0, 0.4)';
+        else glowColor = 'rgba(255, 50, 50, 0.4)';
 
-            // Draw the sprite
-            const size = 40;
-            ctx.drawImage(sprite, item.x - size / 2, item.y - size / 2, size, size);
+        ctx.fillStyle = glowColor;
+        ctx.beginPath();
+        ctx.arc(item.x, item.y, 35, 0, Math.PI * 2);
+        ctx.fill();
 
-            // Draw label
-            ctx.fillStyle = '#fff';
-            ctx.font = 'bold 10px Arial';
-            ctx.textAlign = 'center';
-            const label = item.type === 'machine_gun' ? 'MACHINE GUN' :
-                item.type === 'shotgun' ? 'SHOTGUN' : 'HEALTH';
-            ctx.fillText(label, item.x, item.y + 30);
+        // Draw the chest sprite
+        if (chestSprite && chestSprite.complete) {
+            const size = 48;
+            ctx.drawImage(chestSprite, item.x - size / 2, item.y - size / 2, size, size);
         }
+
+        // Draw label with background
+        ctx.font = 'bold 12px Arial';
+        ctx.textAlign = 'center';
+        const label = item.type === 'machine_gun' ? 'MACHINE GUN' :
+            item.type === 'shotgun' ? 'SHOTGUN' : 'HEALTH +25';
+
+        // Text background
+        const textWidth = ctx.measureText(label).width;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(item.x - textWidth / 2 - 4, item.y + 28, textWidth + 8, 16);
+
+        // Text
+        ctx.fillStyle = item.type === 'health' ? '#2ecc71' : '#f1c40f';
+        ctx.fillText(label, item.x, item.y + 40);
     }
 
     // Draw Zombies
@@ -1050,8 +1105,15 @@ function draw() {
         ctx.translate(p.x, p.y);
         ctx.rotate(p.angle);
 
-        // Draw Player Sprite using their assigned skin
-        const spriteToUse = playerSkins[p.skin] || playerSkins.hitman1;
+        // Draw Player Sprite using their assigned skin and weapon
+        let spriteToUse;
+        if (p.weapon === 'machine_gun' && playerSkinsMachine[p.skin]) {
+            spriteToUse = playerSkinsMachine[p.skin];
+        } else if (p.weapon === 'shotgun' && playerSkinsShotgun[p.skin]) {
+            spriteToUse = playerSkinsShotgun[p.skin];
+        } else {
+            spriteToUse = playerSkins[p.skin] || playerSkins.hitman1;
+        }
         ctx.drawImage(spriteToUse, -25, -20, 50, 40); // Centered approx
 
         ctx.restore();
@@ -1234,6 +1296,9 @@ mainMenuBtn.addEventListener('click', (e) => {
     currentWeapon = 'pistol';
     myAmmo = 0;
     players = {}; // Clear player data
+    items = []; // Clear items
+    zombies = [];
+    projectiles = [];
 
     // Reset HUD
     scoreDisplay.textContent = 'Score: 0';
