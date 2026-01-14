@@ -689,6 +689,15 @@ if (leftJoystickZone) {
         if (!gameJoined) return;
         e.preventDefault();
 
+        // Check if dead - respawn instead of moving in multiplayer
+        const myPlayer = players[socket.id];
+        if (myPlayer && myPlayer.hp <= 0) {
+            if (!isSinglePlayer && !isOfflineSinglePlayer) {
+                socket.emit('restart');
+            }
+            return;
+        }
+
         const touch = e.changedTouches[0];
         leftJoystickTouchId = touch.identifier;
         leftJoystickActive = true;
@@ -771,6 +780,15 @@ if (rightJoystickZone) {
     rightJoystickZone.addEventListener('touchstart', (e) => {
         if (!gameJoined) return;
         e.preventDefault();
+
+        // Check if dead - respawn instead of shooting in multiplayer
+        const myPlayer = players[socket.id];
+        if (myPlayer && myPlayer.hp <= 0) {
+            if (!isSinglePlayer && !isOfflineSinglePlayer) {
+                socket.emit('restart');
+            }
+            return;
+        }
 
         const touch = e.changedTouches[0];
         rightJoystickTouchId = touch.identifier;
@@ -914,6 +932,15 @@ const restartBtn = document.getElementById('restartBtn');
 restartBtn.addEventListener('click', () => {
     socket.emit('restart');
     restartBtn.style.display = 'none';
+});
+
+// Mobile: tap anywhere to respawn when dead in multiplayer
+canvas.addEventListener('touchend', (e) => {
+    if (!gameJoined) return;
+    const myPlayer = players[socket.id];
+    if (myPlayer && myPlayer.hp <= 0 && !isSinglePlayer && !isOfflineSinglePlayer) {
+        socket.emit('restart');
+    }
 });
 
 // Main Loop
@@ -1880,8 +1907,9 @@ function draw() {
         // In multiplayer, show respawn prompt - game over only when all players die
         if (!isSinglePlayer && !isOfflineSinglePlayer) {
             ctx.font = '24px Arial';
-            ctx.fillText('Press R or click Restart to respawn', canvas.width / 2, canvas.height / 2 + 50);
-            restartBtn.style.display = 'block';
+            const isMobile = 'ontouchstart' in window;
+            ctx.fillText(isMobile ? 'Tap anywhere to respawn' : 'Press R to respawn', canvas.width / 2, canvas.height / 2 + 50);
+            restartBtn.style.display = isMobile ? 'none' : 'block';
         } else {
             // In single player, show game over screen (only once)
             if (!isDead) {
