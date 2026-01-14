@@ -76,15 +76,25 @@
 
         <!-- Mobile Controls -->
         <div id="mobileControls">
-            <!-- Single Joystick Zone (Move & Aim) -->
+            <!-- Left Joystick Zone (Movement) -->
             <div id="leftJoystickZone" class="joystick-zone">
                 <div id="leftJoystickBase" class="joystick-base">
                     <div id="leftJoystickKnob" class="joystick-knob"></div>
                 </div>
             </div>
 
-            <!-- Shoot Button -->
-            <button id="shootBtn">🔫</button>
+            <!-- Right Joystick Zone (Aim/Target) -->
+            <div id="rightJoystickZone" class="joystick-zone">
+                <div id="rightJoystickBase" class="joystick-base">
+                    <div id="rightJoystickKnob" class="joystick-knob"></div>
+                </div>
+            </div>
+
+            <!-- Target Lock Indicator -->
+            <div id="targetLockIndicator">
+                <span id="targetLockIcon">🎯</span>
+                <span id="targetLockText">AUTO</span>
+            </div>
         </div>
     </div>
 

@@ -444,28 +444,129 @@ const mobileControls = document.getElementById('mobileControls');
 const leftJoystickZone = document.getElementById('leftJoystickZone');
 const leftJoystickBase = document.getElementById('leftJoystickBase');
 const leftJoystickKnob = document.getElementById('leftJoystickKnob');
-const shootBtn = document.getElementById('shootBtn');
+const rightJoystickZone = document.getElementById('rightJoystickZone');
+const rightJoystickBase = document.getElementById('rightJoystickBase');
+const rightJoystickKnob = document.getElementById('rightJoystickKnob');
+const targetLockIndicator = document.getElementById('targetLockIndicator');
+const targetLockText = document.getElementById('targetLockText');
 
 // Joystick state
 let leftJoystickActive = false;
 let leftJoystickCenter = { x: 0, y: 0 };
 let leftJoystickTouchId = null;
 
+let rightJoystickActive = false;
+let rightJoystickCenter = { x: 0, y: 0 };
+let rightJoystickTouchId = null;
+
 // Movement from joystick
 let joystickMovement = { x: 0, y: 0 };
-let joystickAimAngle = 0;
-let useJoystickAim = false;
 
-// Shoot button state
-let shootBtnTouchId = null;
+// Auto-aim system
+let currentTarget = null;
+let autoAimAngle = 0;
+let useAutoAim = false;
+let manualAimAngle = 0;
+let isManualAiming = false;
 let mobileAutoFireInterval = null;
+let lastAutoAimUpdate = 0;
+const AUTO_AIM_THROTTLE = 100; // Only update auto-aim every 100ms
 
 // Joystick constants
-const JOYSTICK_RADIUS = 60; // Base radius
-const KNOB_MAX_DISTANCE = 45; // Max knob travel distance
-const DEAD_ZONE = 0.15; // Dead zone for movement
+const KNOB_MAX_DISTANCE = 55;
+const DEAD_ZONE = 0.15;
+const TARGET_SWITCH_THRESHOLD = 0.4; // How much stick movement to switch target
 
-// Single Joystick (Movement + Aim)
+// Find closest zombie to player
+function findClosestZombie(playerX, playerY) {
+    if (!zombies || zombies.length === 0) return null;
+
+    let closest = null;
+    let closestDist = Infinity;
+
+    for (const zombie of zombies) {
+        const dx = zombie.x - playerX;
+        const dy = zombie.y - playerY;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        // Only target zombies within reasonable range (600 units)
+        if (dist < closestDist && dist < 600) {
+            closestDist = dist;
+            closest = zombie;
+        }
+    }
+
+    return closest;
+}
+
+// Find zombie in direction (for manual target switching)
+function findZombieInDirection(playerX, playerY, angle, excludeZombie) {
+    if (!zombies || zombies.length === 0) return null;
+
+    let best = null;
+    let bestScore = -Infinity;
+
+    for (const zombie of zombies) {
+        if (zombie === excludeZombie) continue;
+
+        const dx = zombie.x - playerX;
+        const dy = zombie.y - playerY;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist > 600 || dist < 10) continue;
+
+        // Calculate angle to zombie
+        const zombieAngle = Math.atan2(dy, dx);
+
+        // Calculate angle difference
+        let angleDiff = Math.abs(zombieAngle - angle);
+        if (angleDiff > Math.PI) angleDiff = 2 * Math.PI - angleDiff;
+
+        // Score based on how close the angle is (lower diff = higher score)
+        // Also factor in distance (closer = better)
+        const angleScore = 1 - (angleDiff / Math.PI);
+        const distScore = 1 - (dist / 600);
+        const score = angleScore * 0.7 + distScore * 0.3;
+
+        if (score > bestScore && angleDiff < Math.PI / 3) { // Within 60 degrees
+            bestScore = score;
+            best = zombie;
+        }
+    }
+
+    return best;
+}
+
+// Update auto-aim angle
+function updateAutoAim() {
+    const myPlayer = players[socket.id];
+    if (!myPlayer || myPlayer.hp <= 0) {
+        currentTarget = null;
+        return;
+    }
+
+    // If manual aiming, use that angle
+    if (isManualAiming) {
+        autoAimAngle = manualAimAngle;
+        return;
+    }
+
+    // Find closest zombie for auto-aim
+    const closest = findClosestZombie(myPlayer.x, myPlayer.y);
+
+    if (closest) {
+        currentTarget = closest;
+        const dx = closest.x - myPlayer.x;
+        const dy = closest.y - myPlayer.y;
+        autoAimAngle = Math.atan2(dy, dx);
+        useAutoAim = true;
+    } else {
+        currentTarget = null;
+        useAutoAim = false;
+    }
+}
+
+// Left Joystick (Movement only)
 if (leftJoystickZone) {
     leftJoystickZone.addEventListener('touchstart', (e) => {
         if (!gameJoined) return;
@@ -475,14 +576,10 @@ if (leftJoystickZone) {
         leftJoystickTouchId = touch.identifier;
         leftJoystickActive = true;
         leftJoystickCenter = { x: touch.clientX, y: touch.clientY };
-        useJoystickAim = true;
 
-        // Position and show joystick
         leftJoystickBase.style.left = touch.clientX + 'px';
         leftJoystickBase.style.top = touch.clientY + 'px';
         leftJoystickBase.classList.add('active');
-
-        // Reset knob position
         leftJoystickKnob.style.transform = 'translate(-50%, -50%)';
     }, { passive: false });
 
@@ -490,7 +587,6 @@ if (leftJoystickZone) {
         if (!leftJoystickActive) return;
         e.preventDefault();
 
-        // Find our specific touch
         let touch = null;
         for (let t of e.changedTouches) {
             if (t.identifier === leftJoystickTouchId) {
@@ -500,12 +596,10 @@ if (leftJoystickZone) {
         }
         if (!touch) return;
 
-        // Calculate offset from center
         const dx = touch.clientX - leftJoystickCenter.x;
         const dy = touch.clientY - leftJoystickCenter.y;
         const distance = Math.sqrt(dx * dx + dy * dy);
 
-        // Clamp to max distance
         let clampedX = dx;
         let clampedY = dy;
         if (distance > KNOB_MAX_DISTANCE) {
@@ -513,29 +607,18 @@ if (leftJoystickZone) {
             clampedY = (dy / distance) * KNOB_MAX_DISTANCE;
         }
 
-        // Move knob visually
         leftJoystickKnob.style.transform = `translate(calc(-50% + ${clampedX}px), calc(-50% + ${clampedY}px))`;
 
-        // Calculate normalized movement (-1 to 1)
         const normalizedX = clampedX / KNOB_MAX_DISTANCE;
         const normalizedY = clampedY / KNOB_MAX_DISTANCE;
 
-        // Apply dead zone
         joystickMovement.x = Math.abs(normalizedX) > DEAD_ZONE ? normalizedX : 0;
         joystickMovement.y = Math.abs(normalizedY) > DEAD_ZONE ? normalizedY : 0;
 
-        // Update keys based on joystick direction
         keys.a = joystickMovement.x < -DEAD_ZONE;
         keys.d = joystickMovement.x > DEAD_ZONE;
         keys.w = joystickMovement.y < -DEAD_ZONE;
         keys.s = joystickMovement.y > DEAD_ZONE;
-
-        // Calculate aim angle
-        // Only update angle if moved past deadzone to avoid jumpy aim at center
-        if (distance > 10) {
-            joystickAimAngle = Math.atan2(dy, dx);
-        }
-
     }, { passive: false });
 
     leftJoystickZone.addEventListener('touchend', (e) => {
@@ -544,8 +627,6 @@ if (leftJoystickZone) {
                 leftJoystickActive = false;
                 leftJoystickTouchId = null;
                 leftJoystickBase.classList.remove('active');
-
-                // Reset movement
                 joystickMovement = { x: 0, y: 0 };
                 keys.w = false;
                 keys.a = false;
@@ -568,34 +649,115 @@ if (leftJoystickZone) {
     });
 }
 
-// Shoot Button Logic
-if (shootBtn) {
-    shootBtn.addEventListener('touchstart', (e) => {
+// Right Joystick (Aim + Auto-fire + Target Switch)
+if (rightJoystickZone) {
+    rightJoystickZone.addEventListener('touchstart', (e) => {
         if (!gameJoined) return;
         e.preventDefault();
-        e.stopPropagation();
 
-        shootBtnTouchId = e.changedTouches[0].identifier;
+        const touch = e.changedTouches[0];
+        rightJoystickTouchId = touch.identifier;
+        rightJoystickActive = true;
+        rightJoystickCenter = { x: touch.clientX, y: touch.clientY };
 
-        // Fire immediately
+        rightJoystickBase.style.left = touch.clientX + 'px';
+        rightJoystickBase.style.top = touch.clientY + 'px';
+        rightJoystickBase.classList.add('active');
+        rightJoystickKnob.style.transform = 'translate(-50%, -50%)';
+
+        // Show target indicator
+        if (targetLockIndicator) {
+            targetLockIndicator.classList.add('active');
+        }
+
+        // Start auto-fire
         socket.emit('shoot');
         playSound('shoot');
 
-        // Start auto-fire for machine gun
-        if (currentWeapon === 'machine_gun') {
-            mobileAutoFireInterval = setInterval(() => {
-                if (shootBtnTouchId !== null && currentWeapon === 'machine_gun') {
-                    socket.emit('shoot');
-                    playSound('shoot');
+        mobileAutoFireInterval = setInterval(() => {
+            if (rightJoystickActive) {
+                socket.emit('shoot');
+                playSound('shoot');
+            }
+        }, currentWeapon === 'machine_gun' ? 100 : (currentWeapon === 'shotgun' ? 400 : 250));
+    }, { passive: false });
+
+    rightJoystickZone.addEventListener('touchmove', (e) => {
+        if (!rightJoystickActive) return;
+        e.preventDefault();
+
+        let touch = null;
+        for (let t of e.changedTouches) {
+            if (t.identifier === rightJoystickTouchId) {
+                touch = t;
+                break;
+            }
+        }
+        if (!touch) return;
+
+        const dx = touch.clientX - rightJoystickCenter.x;
+        const dy = touch.clientY - rightJoystickCenter.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+
+        let clampedX = dx;
+        let clampedY = dy;
+        if (distance > KNOB_MAX_DISTANCE) {
+            clampedX = (dx / distance) * KNOB_MAX_DISTANCE;
+            clampedY = (dy / distance) * KNOB_MAX_DISTANCE;
+        }
+
+        rightJoystickKnob.style.transform = `translate(calc(-50% + ${clampedX}px), calc(-50% + ${clampedY}px))`;
+
+        const normalizedMagnitude = distance / KNOB_MAX_DISTANCE;
+
+        // If stick moved significantly, switch to manual aim / target selection
+        if (normalizedMagnitude > TARGET_SWITCH_THRESHOLD) {
+            isManualAiming = true;
+            manualAimAngle = Math.atan2(dy, dx);
+
+            // Try to find a zombie in that direction
+            const myPlayer = players[socket.id];
+            if (myPlayer) {
+                const newTarget = findZombieInDirection(myPlayer.x, myPlayer.y, manualAimAngle, null);
+                if (newTarget) {
+                    currentTarget = newTarget;
+                    // Snap aim to target
+                    const tdx = newTarget.x - myPlayer.x;
+                    const tdy = newTarget.y - myPlayer.y;
+                    manualAimAngle = Math.atan2(tdy, tdx);
+
+                    // Update indicator
+                    if (targetLockIndicator && targetLockText) {
+                        targetLockIndicator.classList.add('locked');
+                        targetLockText.textContent = 'LOCKED';
+                    }
                 }
-            }, 100);
+            }
+        } else {
+            // Stick near center - use auto-aim
+            isManualAiming = false;
+            if (targetLockIndicator && targetLockText) {
+                targetLockIndicator.classList.remove('locked');
+                targetLockText.textContent = 'AUTO';
+            }
         }
     }, { passive: false });
 
-    shootBtn.addEventListener('touchend', (e) => {
+    rightJoystickZone.addEventListener('touchend', (e) => {
         for (let touch of e.changedTouches) {
-            if (touch.identifier === shootBtnTouchId) {
-                shootBtnTouchId = null;
+            if (touch.identifier === rightJoystickTouchId) {
+                rightJoystickActive = false;
+                rightJoystickTouchId = null;
+                rightJoystickBase.classList.remove('active');
+                isManualAiming = false;
+
+                // Hide target indicator
+                if (targetLockIndicator) {
+                    targetLockIndicator.classList.remove('active');
+                    targetLockIndicator.classList.remove('locked');
+                }
+
+                // Stop auto-fire
                 if (mobileAutoFireInterval) {
                     clearInterval(mobileAutoFireInterval);
                     mobileAutoFireInterval = null;
@@ -605,8 +767,17 @@ if (shootBtn) {
         }
     });
 
-    shootBtn.addEventListener('touchcancel', (e) => {
-        shootBtnTouchId = null;
+    rightJoystickZone.addEventListener('touchcancel', (e) => {
+        rightJoystickActive = false;
+        rightJoystickTouchId = null;
+        rightJoystickBase.classList.remove('active');
+        isManualAiming = false;
+
+        if (targetLockIndicator) {
+            targetLockIndicator.classList.remove('active');
+            targetLockIndicator.classList.remove('locked');
+        }
+
         if (mobileAutoFireInterval) {
             clearInterval(mobileAutoFireInterval);
             mobileAutoFireInterval = null;
@@ -640,11 +811,12 @@ let myScore = 0;
 
 // Blood splatter particles
 let bloodSplatters = [];
+const MAX_BLOOD_SPLATTERS = 300; // Limit for performance
 
 // Handle player death - create blood splatter
 socket.on('playerDeath', (data) => {
-    // Create blood particles at death location
-    for (let i = 0; i < 15; i++) {
+    // Create blood particles at death location (with limit)
+    for (let i = 0; i < 15 && bloodSplatters.length < MAX_BLOOD_SPLATTERS; i++) {
         bloodSplatters.push({
             x: data.x + (Math.random() - 0.5) * 40,
             y: data.y + (Math.random() - 0.5) * 40,
@@ -811,7 +983,7 @@ socket.on('stateUpdate', (state) => {
 
 // Handle zombie death - create blood splatter
 socket.on('zombieDeath', (data) => {
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 10 && bloodSplatters.length < MAX_BLOOD_SPLATTERS; i++) {
         bloodSplatters.push({
             x: data.x + (Math.random() - 0.5) * 30,
             y: data.y + (Math.random() - 0.5) * 30,
@@ -964,6 +1136,53 @@ pauseMainMenuBtn.addEventListener('click', (e) => {
 const AudioContext = window.AudioContext || window.webkitAudioContext;
 const audioCtx = new AudioContext();
 
+// Zombie sounds
+const zombieSounds = {
+    hit: new Audio('sounds/454837__misterkidx__zombie_hit.wav'),
+    roar: new Audio('sounds/144005__arrigd__zombie-roar-5.wav'),
+    idle: [
+        new Audio('sounds/163439__under7dude__zombie-2.wav'),
+        new Audio('sounds/181372__l4red0__zombie_01.wav'),
+        new Audio('sounds/445992__breviceps__zombie-gargles-3.wav')
+    ]
+};
+
+// Set volume for zombie sounds
+zombieSounds.hit.volume = 0.3;
+zombieSounds.roar.volume = 0.25;
+zombieSounds.idle.forEach(s => s.volume = 0.15);
+
+// Throttle zombie sounds to prevent audio spam
+let lastZombieHitSound = 0;
+let lastZombieRoarSound = 0;
+let lastZombieIdleSound = 0;
+const ZOMBIE_HIT_COOLDOWN = 100;   // ms between hit sounds
+const ZOMBIE_ROAR_COOLDOWN = 3000; // ms between roar sounds
+const ZOMBIE_IDLE_INTERVAL = 8000; // ms between idle sounds
+
+function playZombieSound(type) {
+    const now = Date.now();
+
+    if (type === 'hit' && now - lastZombieHitSound > ZOMBIE_HIT_COOLDOWN) {
+        lastZombieHitSound = now;
+        const sound = zombieSounds.hit.cloneNode();
+        sound.volume = 0.2 + Math.random() * 0.2;
+        sound.playbackRate = 0.9 + Math.random() * 0.2;
+        sound.play().catch(() => {});
+    } else if (type === 'roar' && now - lastZombieRoarSound > ZOMBIE_ROAR_COOLDOWN) {
+        lastZombieRoarSound = now;
+        const sound = zombieSounds.roar.cloneNode();
+        sound.volume = 0.2 + Math.random() * 0.15;
+        sound.play().catch(() => {});
+    } else if (type === 'idle' && now - lastZombieIdleSound > ZOMBIE_IDLE_INTERVAL) {
+        lastZombieIdleSound = now;
+        const randomIdle = zombieSounds.idle[Math.floor(Math.random() * zombieSounds.idle.length)];
+        const sound = randomIdle.cloneNode();
+        sound.volume = 0.1 + Math.random() * 0.1;
+        sound.play().catch(() => {});
+    }
+}
+
 function playSound(type) {
     if (audioCtx.state === 'suspended') {
         audioCtx.resume();
@@ -1038,35 +1257,56 @@ socket.on('hit', () => {
     playSound('hit');
 });
 
+// Zombie sound events
+socket.on('zombieHit', () => {
+    playZombieSound('hit');
+});
+
+socket.on('zombieRoar', () => {
+    playZombieSound('roar');
+});
+
 function update() {
-    // Calculate angle relative to center of screen (assuming camera follows player, 
-    // BUT for now this is a simple static map, so relative to player position IF we had camera.
-    // However, without camera, we just send global mouse if we want, OR
-    // if the requirement is "player in center", we need camera logic.
-    // The request said "simple socket web game", let's assume static map for now or 
-    // just client sends input, server updates world.
-
-    // BUT wait, to aim correctly, we need to know WHERE the player is on screen.
-    // If we just render the world as is, the player might move off screen.
-    // Let's implement a simple camera that follows the current player.
-
     const myId = socket.id;
     const myPlayer = players[myId];
 
     let angle = 0;
+    const now = Date.now();
     if (myPlayer) {
-        // Use joystick aim if on mobile and joystick was used
-        if (useJoystickAim) {
-            angle = joystickAimAngle;
+        // Throttled auto-aim update for mobile (only every AUTO_AIM_THROTTLE ms)
+        const shouldUpdateAutoAim = isMobile && (now - lastAutoAimUpdate >= AUTO_AIM_THROTTLE);
+        if (shouldUpdateAutoAim) {
+            lastAutoAimUpdate = now;
+            updateAutoAim();
+        }
+
+        // Update auto-aim for mobile
+        if (isMobile && rightJoystickActive) {
+            angle = isManualAiming ? manualAimAngle : autoAimAngle;
+        } else if (isMobile && !rightJoystickActive) {
+            // Use mouse/touch position if available, otherwise keep last angle
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            const dx = mouse.x - centerX;
+            const dy = mouse.y - centerY;
+            if (Math.sqrt(dx*dx + dy*dy) > 10) {
+                angle = Math.atan2(dy, dx);
+            } else if (useAutoAim) {
+                angle = autoAimAngle;
+            }
         } else {
-            // Calculate angle from player center to mouse
-            // Since we will center the player on screen:
+            // Desktop: use mouse
             const centerX = canvas.width / 2;
             const centerY = canvas.height / 2;
             const dx = mouse.x - centerX;
             const dy = mouse.y - centerY;
             angle = Math.atan2(dy, dx);
         }
+    }
+
+    // Trigger random zombie idle sounds when zombies are present
+    if (zombies && zombies.length > 0) {
+        playZombieSound('idle');
     }
 
     socket.emit('playerInput', {
@@ -1235,6 +1475,55 @@ function draw() {
         ctx.fillRect(zombie.x - 15, zombie.y - 30, 30, 4);
         ctx.fillStyle = zombie.weapon ? '#e67e22' : '#e74c3c'; // Orange for armed, red for regular
         ctx.fillRect(zombie.x - 15, zombie.y - 30, 30 * (zombie.hp / maxHP), 4);
+
+        // Draw target reticle if this zombie is the current target (mobile only)
+        if (isMobile && currentTarget && currentTarget.id === zombie.id) {
+            ctx.save();
+            ctx.strokeStyle = isManualAiming ? '#e74c3c' : '#2ecc71';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([5, 5]);
+
+            // Pulsing circle
+            const pulse = Math.sin(Date.now() / 150) * 3 + 35;
+            ctx.beginPath();
+            ctx.arc(zombie.x, zombie.y, pulse, 0, Math.PI * 2);
+            ctx.stroke();
+
+            // Corner brackets
+            ctx.setLineDash([]);
+            const bracketSize = 12;
+            const offset = 28;
+
+            // Top-left
+            ctx.beginPath();
+            ctx.moveTo(zombie.x - offset, zombie.y - offset + bracketSize);
+            ctx.lineTo(zombie.x - offset, zombie.y - offset);
+            ctx.lineTo(zombie.x - offset + bracketSize, zombie.y - offset);
+            ctx.stroke();
+
+            // Top-right
+            ctx.beginPath();
+            ctx.moveTo(zombie.x + offset - bracketSize, zombie.y - offset);
+            ctx.lineTo(zombie.x + offset, zombie.y - offset);
+            ctx.lineTo(zombie.x + offset, zombie.y - offset + bracketSize);
+            ctx.stroke();
+
+            // Bottom-left
+            ctx.beginPath();
+            ctx.moveTo(zombie.x - offset, zombie.y + offset - bracketSize);
+            ctx.lineTo(zombie.x - offset, zombie.y + offset);
+            ctx.lineTo(zombie.x - offset + bracketSize, zombie.y + offset);
+            ctx.stroke();
+
+            // Bottom-right
+            ctx.beginPath();
+            ctx.moveTo(zombie.x + offset - bracketSize, zombie.y + offset);
+            ctx.lineTo(zombie.x + offset, zombie.y + offset);
+            ctx.lineTo(zombie.x + offset, zombie.y + offset - bracketSize);
+            ctx.stroke();
+
+            ctx.restore();
+        }
     }
 
     // Draw Players

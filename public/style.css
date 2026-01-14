@@ -839,126 +839,159 @@ canvas {
     }
 }
 
-/* Joystick Zones */
+/* Joystick Zones - Split screen left/right */
 .joystick-zone {
     position: absolute;
     bottom: 0;
-    height: 50%;
+    height: 60%;
     pointer-events: auto;
     touch-action: none;
 }
 
 #leftJoystickZone {
     left: 0;
-    width: 100%;
-    /* Full width for single stick preference */
+    width: 50%;
     height: 100%;
-    /* Valid everywhere for ease */
+}
+
+#rightJoystickZone {
+    right: 0;
+    width: 50%;
+    height: 100%;
 }
 
 /* Joystick Base (appears on touch) */
 .joystick-base {
     display: none;
     position: absolute;
-    width: 120px;
-    height: 120px;
+    width: 140px;
+    height: 140px;
     border-radius: 50%;
-    background: rgba(255, 255, 255, 0.15);
-    border: 3px solid rgba(255, 255, 255, 0.3);
+    background: rgba(0, 0, 0, 0.4);
+    border: 3px solid rgba(255, 255, 255, 0.25);
     transform: translate(-50%, -50%);
-    box-shadow: 0 0 20px rgba(0, 217, 255, 0.3);
+    backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
 }
 
 .joystick-base.active {
     display: block;
 }
 
+/* Left joystick - blue theme for movement */
+#leftJoystickBase {
+    box-shadow:
+        0 0 30px rgba(52, 152, 219, 0.4),
+        inset 0 0 20px rgba(52, 152, 219, 0.1);
+    border-color: rgba(52, 152, 219, 0.5);
+}
+
+/* Right joystick - red/orange theme for combat */
+#rightJoystickBase {
+    box-shadow:
+        0 0 30px rgba(231, 76, 60, 0.4),
+        inset 0 0 20px rgba(231, 76, 60, 0.1);
+    border-color: rgba(231, 76, 60, 0.5);
+}
+
 /* Joystick Knob */
 .joystick-knob {
     position: absolute;
-    width: 50px;
-    height: 50px;
+    width: 60px;
+    height: 60px;
     border-radius: 50%;
-    background: radial-gradient(circle at 30% 30%, #e94560, #c0392b);
-    /* Reddish for combat focus */
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    box-shadow:
-        0 4px 15px rgba(233, 69, 96, 0.5),
-        inset 0 -2px 5px rgba(0, 0, 0, 0.3),
-        inset 0 2px 5px rgba(255, 255, 255, 0.3);
+    transition: transform 0.05s ease-out;
 }
 
-/* Shoot Button */
-#shootBtn {
-    position: fixed;
-    bottom: 30px;
-    right: 30px;
-    width: 90px;
-    height: 90px;
-    border-radius: 50%;
+/* Left knob - blue for movement */
+#leftJoystickKnob {
+    background: radial-gradient(circle at 30% 30%, #3498db, #2980b9);
+    box-shadow:
+        0 4px 20px rgba(52, 152, 219, 0.6),
+        inset 0 -3px 8px rgba(0, 0, 0, 0.3),
+        inset 0 3px 8px rgba(255, 255, 255, 0.3);
+    border: 2px solid rgba(255, 255, 255, 0.3);
+}
+
+/* Right knob - red for combat */
+#rightJoystickKnob {
     background: radial-gradient(circle at 30% 30%, #e74c3c, #c0392b);
-    border: 4px solid rgba(255, 255, 255, 0.3);
-    font-size: 40px;
-    color: white;
-    cursor: pointer;
-    z-index: 200;
-    pointer-events: auto;
-    touch-action: none;
     box-shadow:
-        0 6px 20px rgba(231, 76, 60, 0.6),
-        inset 0 -3px 10px rgba(0, 0, 0, 0.3),
-        inset 0 3px 10px rgba(255, 255, 255, 0.2);
-    display: none;
-    /* Hidden by default, shown via media query */
-    transition: transform 0.1s, box-shadow 0.1s;
-    user-select: none;
-    -webkit-user-select: none;
+        0 4px 20px rgba(231, 76, 60, 0.6),
+        inset 0 -3px 8px rgba(0, 0, 0, 0.3),
+        inset 0 3px 8px rgba(255, 255, 255, 0.3);
+    border: 2px solid rgba(255, 255, 255, 0.3);
 }
 
-#shootBtn:active {
-    transform: scale(0.95);
-    box-shadow:
-        0 3px 10px rgba(231, 76, 60, 0.6),
-        inset 0 -1px 5px rgba(0, 0, 0, 0.3),
-        inset 0 1px 5px rgba(255, 255, 255, 0.2);
+/* Target Lock Indicator - Hidden */
+#targetLockIndicator {
+    display: none !important;
 }
 
-/* Joystick adjustments for simple usage */
-@media (pointer: coarse),
-(hover: none) {
-    #shootBtn {
-        display: flex;
-        justify-content: center;
-        align-items: center;
-    }
+/* Static joystick hints (always visible) */
+.joystick-hint {
+    position: absolute;
+    width: 100px;
+    height: 100px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.05);
+    border: 2px dashed rgba(255, 255, 255, 0.15);
+    pointer-events: none;
+}
 
-    /* Hide chat on smaller mobile screens */
-    @media (max-width: 600px) {
-        #chatBox {
-            display: none;
-        }
+#leftJoystickHint {
+    left: 80px;
+    bottom: 80px;
+}
+
+#rightJoystickHint {
+    right: 80px;
+    bottom: 80px;
+}
+
+/* Mobile touch feedback */
+@media (pointer: coarse), (hover: none) {
+    /* Hide chat on mobile */
+    #chatBox {
+        display: none;
     }
 
     /* Adjust UI for mobile */
     #scoreDisplay,
     #phaseDisplay,
     #weaponDisplay {
-        font-size: 14px;
-        padding: 8px 12px;
+        font-size: 12px;
+        padding: 6px 10px;
+    }
+
+    #phaseDisplay {
+        top: 50px;
+    }
+
+    #weaponDisplay {
+        top: 85px;
     }
 
     #playerCount {
-        font-size: 12px;
-        padding: 6px 10px;
+        font-size: 11px;
+        padding: 5px 8px;
+    }
+
+    /* Make sure game area doesn't scroll */
+    #gameScreen {
+        touch-action: none;
+        overflow: hidden;
     }
 }
 
 /* Prevent text selection and context menu on mobile */
 #mobileControls,
-#shootBtn,
-.joystick-zone {
+.joystick-zone,
+.joystick-base,
+.joystick-knob {
     -webkit-user-select: none;
     -moz-user-select: none;
     -ms-user-select: none;

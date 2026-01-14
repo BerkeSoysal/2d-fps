@@ -95,7 +95,9 @@ function getPlayerRoom(socketId) {
 }
 
 // Global constants
-const SPEED = 5;
+const MAX_SPEED = 5;
+const ACCELERATION = 0.5;
+const FRICTION = 0.85; // Deceleration multiplier (lower = more friction)
 const PROJECTILE_SPEED = 18;
 const ZOMBIE_SPEED = 2; // Default, can be overridden per phase
 const CANVAS_WIDTH = 2000;
@@ -353,8 +355,10 @@ io.on('connection', (socket) => {
       const skin = SKINS[Math.floor(Math.random() * SKINS.length)];
       room.players[p.id] = {
         x: startX, y: startY, angle: 0, hp: 100,
+        vx: 0, vy: 0, // Velocity for smooth movement
         playerId: p.id, name: p.name, skin: skin, score: 0,
-        weapon: 'pistol', ammo: 0
+        weapon: 'pistol', ammo: 0,
+        input: { up: false, down: false, left: false, right: false } // Store input state
       };
     }
 
@@ -423,18 +427,13 @@ io.on('connection', (socket) => {
     const player = room.players[socket.id];
     if (!player || player.hp <= 0) return;
 
-    let newX = player.x, newY = player.y;
-    if (data.left) newX -= SPEED;
-    if (data.right) newX += SPEED;
-    if (data.up) newY -= SPEED;
-    if (data.down) newY += SPEED;
-
-    newX = Math.max(0, Math.min(CANVAS_WIDTH, newX));
-    newY = Math.max(0, Math.min(CANVAS_HEIGHT, newY));
-
-    if (!checkWallCollision(newX, player.y, 20) && !checkDecorationCollision(newX, player.y, 15)) player.x = newX;
-    if (!checkWallCollision(player.x, newY, 20) && !checkDecorationCollision(player.x, newY, 15)) player.y = newY;
-
+    // Store input state - movement is processed in game loop
+    player.input = {
+      up: data.up,
+      down: data.down,
+      left: data.left,
+      right: data.right
+    };
     player.angle = data.angle;
   });
 
@@ -514,6 +513,9 @@ io.on('connection', (socket) => {
       player.score = 0;
       player.weapon = 'pistol';
       player.ammo = 0;
+      player.vx = 0;
+      player.vy = 0;
+      player.input = { up: false, down: false, left: false, right: false };
       let rX, rY, attempts = 0;
       do {
         rX = 100 + Math.random() * (CANVAS_WIDTH - 200);
@@ -571,6 +573,56 @@ setInterval(() => {
 }, 1000 / 60);
 
 function updateRoom(room, now) {
+  // 0. Process Player Movement with Acceleration
+  for (const id in room.players) {
+    const player = room.players[id];
+    if (player.hp <= 0) continue;
+
+    const input = player.input || { up: false, down: false, left: false, right: false };
+
+    // Apply acceleration based on input
+    if (input.left) player.vx -= ACCELERATION;
+    if (input.right) player.vx += ACCELERATION;
+    if (input.up) player.vy -= ACCELERATION;
+    if (input.down) player.vy += ACCELERATION;
+
+    // Clamp velocity to max speed
+    const speed = Math.sqrt(player.vx * player.vx + player.vy * player.vy);
+    if (speed > MAX_SPEED) {
+      player.vx = (player.vx / speed) * MAX_SPEED;
+      player.vy = (player.vy / speed) * MAX_SPEED;
+    }
+
+    // Apply friction when not moving in a direction
+    if (!input.left && !input.right) player.vx *= FRICTION;
+    if (!input.up && !input.down) player.vy *= FRICTION;
+
+    // Stop completely if very slow
+    if (Math.abs(player.vx) < 0.1) player.vx = 0;
+    if (Math.abs(player.vy) < 0.1) player.vy = 0;
+
+    // Calculate new position
+    let newX = player.x + player.vx;
+    let newY = player.y + player.vy;
+
+    // Bounds check
+    newX = Math.max(0, Math.min(CANVAS_WIDTH, newX));
+    newY = Math.max(0, Math.min(CANVAS_HEIGHT, newY));
+
+    // Wall collision with velocity bounce-back
+    if (!checkWallCollision(newX, player.y, 20) && !checkDecorationCollision(newX, player.y, 15)) {
+      player.x = newX;
+    } else {
+      player.vx = 0; // Stop horizontal movement on collision
+    }
+
+    if (!checkWallCollision(player.x, newY, 20) && !checkDecorationCollision(player.x, newY, 15)) {
+      player.y = newY;
+    } else {
+      player.vy = 0; // Stop vertical movement on collision
+    }
+  }
+
   // 1. Process Projectiles
   for (let i = room.projectiles.length - 1; i >= 0; i--) {
     const p = room.projectiles[i];
@@ -631,6 +683,25 @@ function updateRoom(room, now) {
         const dx = p.x - zombie.x, dy = p.y - zombie.y;
         if (Math.sqrt(dx * dx + dy * dy) < 20) {
           zombie.hp -= damage;
+
+          // Notify player who hit the zombie (for sound)
+          io.to(p.ownerId).emit('zombieHit');
+
+          // Knockback - push zombie in direction of projectile
+          const knockbackStrength = 8;
+          const projSpeed = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
+          if (projSpeed > 0) {
+            const knockX = (p.vx / projSpeed) * knockbackStrength;
+            const knockY = (p.vy / projSpeed) * knockbackStrength;
+            const newX = zombie.x + knockX;
+            const newY = zombie.y + knockY;
+            // Only apply if not hitting a wall
+            if (!checkWallCollision(newX, newY, 15) && !checkDecorationCollision(newX, newY, 15)) {
+              zombie.x = Math.max(0, Math.min(CANVAS_WIDTH, newX));
+              zombie.y = Math.max(0, Math.min(CANVAS_HEIGHT, newY));
+            }
+          }
+
           room.projectiles.splice(i, 1);
           if (zombie.hp <= 0) {
             io.to(room.id).emit('zombieDeath', { x: zombie.x, y: zombie.y });
@@ -657,11 +728,14 @@ function updateRoom(room, now) {
 
   for (const zombie of room.zombies) {
     let target = null;
+    const hadTarget = !!zombie.targetId;
 
     // Check current target
     if (zombie.targetId && room.players[zombie.targetId] && room.players[zombie.targetId].hp > 0) {
       if (canSeePlayer(zombie, room.players[zombie.targetId], room.currentPhase)) {
         target = room.players[zombie.targetId];
+      } else {
+        zombie.targetId = null; // Lost sight of target
       }
     }
 
@@ -676,6 +750,11 @@ function updateRoom(room, now) {
           target = p;
           zombie.targetId = p.playerId;
         }
+      }
+
+      // Zombie just acquired a new target - roar!
+      if (target && !hadTarget) {
+        io.to(target.playerId).emit('zombieRoar');
       }
     }
 
@@ -933,13 +1012,17 @@ function updateRoom(room, now) {
     }
   }
 
-  // 5. Send Update to Room
-  io.to(room.id).emit('stateUpdate', {
-    players: room.players,
-    projectiles: room.projectiles,
-    zombies: room.zombies,
-    items: room.items
-  });
+  // 5. Send Update to Room (throttled to 30fps for network performance)
+  const STATE_UPDATE_INTERVAL = 33; // ~30 updates per second
+  if (!room.lastStateUpdate || now - room.lastStateUpdate >= STATE_UPDATE_INTERVAL) {
+    room.lastStateUpdate = now;
+    io.to(room.id).emit('stateUpdate', {
+      players: room.players,
+      projectiles: room.projectiles,
+      zombies: room.zombies,
+      items: room.items
+    });
+  }
 }
 
 // ... Keep PORT and listen at bottom ...
