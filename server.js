@@ -105,6 +105,8 @@ const CANVAS_HEIGHT = 1200;
 const ZOMBIE_SPAWN_INTERVAL = 500;
 const ZOMBIE_HP = 30;
 const MAX_PHASE = 10;
+const ZOMBIE_HEARING_RADIUS = 150; // Zombies can hear bullets within this range
+const ZOMBIE_ALERT_DURATION = 5000; // How long zombies stay alerted (ms)
 
 // Weapon constants
 const WEAPONS = {
@@ -651,6 +653,22 @@ function updateRoom(room, now) {
     const damage = p.damage || 10;
     const isZombieProjectile = p.isZombieProjectile || false;
 
+    // Alert nearby zombies to bullet sound (only player projectiles)
+    if (!isZombieProjectile && p.ownerId) {
+      const shooter = room.players[p.ownerId];
+      if (shooter) {
+        for (const zombie of room.zombies) {
+          const dx = p.x - zombie.x, dy = p.y - zombie.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < ZOMBIE_HEARING_RADIUS && !zombie.targetId) {
+            // Zombie heard the bullet - investigate shooter's position
+            zombie.alertedPosition = { x: shooter.x, y: shooter.y };
+            zombie.alertedTime = now;
+          }
+        }
+      }
+    }
+
     // Hit Player (zombie projectiles and other player projectiles can hit)
     for (const id in room.players) {
       const player = room.players[id];
@@ -686,6 +704,13 @@ function updateRoom(room, now) {
 
           // Notify player who hit the zombie (for sound)
           io.to(p.ownerId).emit('zombieHit');
+
+          // Zombie got hit - track towards shooter even if can't see them
+          const shooter = room.players[p.ownerId];
+          if (shooter) {
+            zombie.alertedPosition = { x: shooter.x, y: shooter.y };
+            zombie.alertedTime = now;
+          }
 
           // Knockback - push zombie in direction of projectile
           const knockbackStrength = 8;
@@ -836,7 +861,37 @@ function updateRoom(room, now) {
         }
       }
 
+    } else if (zombie.alertedPosition && now - zombie.alertedTime < ZOMBIE_ALERT_DURATION) {
+      // No visible target but heard a sound - investigate
+      const dx = zombie.alertedPosition.x - zombie.x;
+      const dy = zombie.alertedPosition.y - zombie.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      if (dist > 30) {
+        // Move towards the sound location
+        const speed = (zombie.speed || ZOMBIE_SPEED) * 0.8; // Slightly slower when investigating
+        const newX = zombie.x + (dx / dist) * speed;
+        const newY = zombie.y + (dy / dist) * speed;
+
+        if (!checkWallCollision(newX, zombie.y, 15)) {
+          zombie.x = newX;
+        }
+        if (!checkWallCollision(zombie.x, newY, 15)) {
+          zombie.y = newY;
+        }
+        zombie.angle = Math.atan2(dy, dx);
+      } else {
+        // Reached the sound location - clear alert and start searching
+        zombie.alertedPosition = null;
+      }
+      zombie.wandering = false;
+
     } else {
+      // Clear expired alert
+      if (zombie.alertedPosition && now - zombie.alertedTime >= ZOMBIE_ALERT_DURATION) {
+        zombie.alertedPosition = null;
+      }
+
       // Wander
       if (!zombie.wandering || Math.random() < 0.02) {
         zombie.wanderAngle = Math.random() * Math.PI * 2;
