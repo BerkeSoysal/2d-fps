@@ -47,6 +47,11 @@ const highScoresBtn = document.getElementById('highScoresBtn');
 const scoresBody = document.getElementById('scoresBody');
 const backFromScoresBtn = document.getElementById('backFromScoresBtn');
 
+// Help overlay elements
+const helpOverlay = document.getElementById('helpOverlay');
+const helpBtn = document.getElementById('helpBtn');
+const closeHelpBtn = document.getElementById('closeHelpBtn');
+
 // Pause screen elements
 const pauseScreen = document.getElementById('pauseScreen');
 const pauseMessage = document.getElementById('pauseMessage');
@@ -66,11 +71,54 @@ let myAmmo = 0;
 let isSinglePlayer = false;
 let isPaused = false;
 
-// Single Player
+// Offline single player state
+let isOfflineSinglePlayer = false;
+let localGameState = null;
+let localPlayerId = 'local_player';
+
+// Single Player - now runs offline without WebSocket
 singlePlayerBtn.addEventListener('click', () => {
     myName = playerNameInput.value.trim() || 'Player';
     isSinglePlayer = true;
-    socket.emit('startSinglePlayer', { playerName: myName });
+    isOfflineSinglePlayer = true;
+
+    // Initialize local game state using shared game logic
+    localGameState = GameLogic.createGameState(localPlayerId, myName);
+
+    // Set up map data from shared module
+    walls = GameLogic.buildingWalls;
+    floors = GameLogic.floors;
+    decorations = GameLogic.decorations;
+
+    // Initialize game variables
+    players = localGameState.players;
+    projectiles = localGameState.projectiles;
+    zombies = localGameState.zombies;
+    items = localGameState.items;
+
+    // Start game
+    gameJoined = true;
+    isDead = false;
+    scoreSubmitted = false;
+    currentPhase = 1;
+
+    // Show game screen
+    homeScreen.style.display = 'none';
+    gameScreen.style.display = 'block';
+    gameOverScreen.style.display = 'none';
+
+    // Update UI
+    if (scoreDisplay) scoreDisplay.textContent = 'Score: 0';
+    if (phaseDisplay) phaseDisplay.textContent = 'Phase 1';
+    updateWeaponDisplay();
+
+    // Start local game loop
+    startLocalGameLoop();
+
+    // Show help for first-time players
+    if (!hasSeenHelp()) {
+        showHelpOverlay();
+    }
 });
 
 // Multiplayer - show room list
@@ -101,6 +149,51 @@ highScoresBtn.addEventListener('click', async () => {
 backFromScoresBtn.addEventListener('click', () => {
     highScoresScreen.style.display = 'none';
     homeScreen.style.display = 'flex';
+});
+
+// Help Overlay Functions
+function showHelpOverlay() {
+    helpOverlay.style.display = 'flex';
+}
+
+function hideHelpOverlay() {
+    helpOverlay.style.display = 'none';
+}
+
+function hasSeenHelp() {
+    return localStorage.getItem('zombieSurvivalHelpSeen') === 'true';
+}
+
+function markHelpAsSeen() {
+    localStorage.setItem('zombieSurvivalHelpSeen', 'true');
+}
+
+// Help button click
+helpBtn.addEventListener('click', () => {
+    showHelpOverlay();
+});
+
+// Close help button
+closeHelpBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    hideHelpOverlay();
+    markHelpAsSeen();
+});
+
+// Click anywhere on overlay to close
+helpOverlay.addEventListener('click', (e) => {
+    if (e.target === helpOverlay) {
+        hideHelpOverlay();
+        markHelpAsSeen();
+    }
+});
+
+// Press any key to close help
+window.addEventListener('keydown', (e) => {
+    if (helpOverlay.style.display === 'flex') {
+        hideHelpOverlay();
+        markHelpAsSeen();
+    }
 });
 
 async function loadHighScores() {
@@ -185,6 +278,11 @@ socket.on('gameStarted', (data) => {
     homeScreen.style.display = 'none';
     lobbyScreen.style.display = 'none';
     gameScreen.style.display = 'block';
+
+    // Show help for first-time players
+    if (!hasSeenHelp()) {
+        showHelpOverlay();
+    }
 });
 
 function showLobby(room) {
@@ -340,6 +438,14 @@ window.addEventListener('keydown', (e) => {
     if (e.key === 'a') keys.a = true;
     if (e.key === 's') keys.s = true;
     if (e.key === 'd') keys.d = true;
+
+    // R key for respawn in multiplayer
+    if (e.key === 'r' || e.key === 'R') {
+        const myPlayer = players[socket.id];
+        if (myPlayer && myPlayer.hp <= 0 && !isSinglePlayer && !isOfflineSinglePlayer) {
+            socket.emit('restart');
+        }
+    }
 });
 
 window.addEventListener('keyup', (e) => {
@@ -355,7 +461,11 @@ window.addEventListener('keydown', (e) => {
         e.preventDefault();
         if (isPaused) {
             // Only host/single player can unpause
-            if (isSinglePlayer || isHost) {
+            if (isOfflineSinglePlayer) {
+                localGameState.isPaused = false;
+                isPaused = false;
+                hidePauseMenu();
+            } else if (isSinglePlayer || isHost) {
                 socket.emit('resumeGame');
             }
         } else {
@@ -366,8 +476,14 @@ window.addEventListener('keydown', (e) => {
 });
 
 function showPauseMenu() {
-    if (isSinglePlayer) {
-        // Single player - pause game
+    if (isOfflineSinglePlayer) {
+        // Offline single player - pause locally
+        localGameState.isPaused = true;
+        pauseMessage.textContent = 'Game Paused';
+        resumeBtn.style.display = 'block';
+        pauseRestartBtn.style.display = 'block';
+    } else if (isSinglePlayer) {
+        // Online single player - pause game
         socket.emit('pauseGame');
         pauseMessage.textContent = 'Game Paused';
         resumeBtn.style.display = 'block';
@@ -412,14 +528,14 @@ window.addEventListener('mousedown', (e) => {
     if (e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT') return;
 
     isMouseDown = true;
-    socket.emit('shoot');
+    handleShoot();
     playSound('shoot');
 
     // Auto-fire for machine gun
     if (currentWeapon === 'machine_gun') {
         autoFireInterval = setInterval(() => {
             if (isMouseDown && currentWeapon === 'machine_gun') {
-                socket.emit('shoot');
+                handleShoot();
                 playSound('shoot');
             }
         }, 100); // Fire every 100ms
@@ -539,7 +655,8 @@ function findZombieInDirection(playerX, playerY, angle, excludeZombie) {
 
 // Update auto-aim angle
 function updateAutoAim() {
-    const myPlayer = players[socket.id];
+    const myId = isOfflineSinglePlayer ? localPlayerId : socket.id;
+    const myPlayer = players[myId];
     if (!myPlayer || myPlayer.hp <= 0) {
         currentTarget = null;
         return;
@@ -671,12 +788,12 @@ if (rightJoystickZone) {
         }
 
         // Start auto-fire
-        socket.emit('shoot');
+        handleShoot();
         playSound('shoot');
 
         mobileAutoFireInterval = setInterval(() => {
             if (rightJoystickActive) {
-                socket.emit('shoot');
+                handleShoot();
                 playSound('shoot');
             }
         }, currentWeapon === 'machine_gun' ? 100 : (currentWeapon === 'shotgun' ? 400 : 250));
@@ -716,7 +833,8 @@ if (rightJoystickZone) {
             manualAimAngle = Math.atan2(dy, dx);
 
             // Try to find a zombie in that direction
-            const myPlayer = players[socket.id];
+            const myIdForAim = isOfflineSinglePlayer ? localPlayerId : socket.id;
+            const myPlayer = players[myIdForAim];
             if (myPlayer) {
                 const newTarget = findZombieInDirection(myPlayer.x, myPlayer.y, manualAimAngle, null);
                 if (newTarget) {
@@ -832,6 +950,19 @@ socket.on('playerDeath', (data) => {
     msgDiv.innerHTML = `💀 <span class="chatName">${escapeHtml(data.killerName)}</span> killed <span class="chatName">${escapeHtml(data.victimName)}</span>`;
     chatMessages.appendChild(msgDiv);
     chatMessages.scrollTop = chatMessages.scrollHeight;
+});
+
+// Handle team game over (all players dead in multiplayer)
+socket.on('teamGameOver', (data) => {
+    // Update score and phase from server
+    myScore = data.teamScore;
+    currentPhase = data.phase;
+
+    // Show game over screen for all players
+    if (!isDead) {
+        isDead = true;
+        showGameOverScreen();
+    }
 });
 
 // Assets - Player skins (pistol)
@@ -968,13 +1099,17 @@ socket.on('stateUpdate', (state) => {
     zombies = state.zombies || [];
     items = state.items || [];
 
-    // Update my score and weapon from server state
+    // Update team score (shared score in multiplayer)
+    if (state.teamScore !== undefined) {
+        myScore = state.teamScore;
+    }
+
+    // Update my weapon from server state
     const myPlayer = players[socket.id];
     if (myPlayer) {
-        myScore = myPlayer.score || 0;
         currentWeapon = myPlayer.weapon || 'pistol';
 
-        // Update score display
+        // Update score display with team score
         if (scoreDisplay) {
             scoreDisplay.textContent = `Score: ${myScore}`;
         }
@@ -1084,7 +1219,11 @@ socket.on('gameResumed', () => {
 // Pause menu button handlers
 resumeBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (isSinglePlayer || isHost) {
+    if (isOfflineSinglePlayer) {
+        localGameState.isPaused = false;
+        isPaused = false;
+        hidePauseMenu();
+    } else if (isSinglePlayer || isHost) {
         socket.emit('resumeGame');
     } else {
         // For joiners, just close the menu
@@ -1095,17 +1234,44 @@ resumeBtn.addEventListener('click', (e) => {
 pauseRestartBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     hidePauseMenu();
-    socket.emit('resumeGame');
-    socket.emit('restart');
+    if (isOfflineSinglePlayer) {
+        localGameState.isPaused = false;
+        isPaused = false;
+        // Reset local game state
+        localGameState = GameLogic.createGameState(localPlayerId, myName);
+        players = localGameState.players;
+        projectiles = localGameState.projectiles;
+        zombies = localGameState.zombies;
+        items = localGameState.items;
+        bloodSplatters = [];
+        isDead = false;
+        myScore = 0;
+        currentPhase = 1;
+        currentWeapon = 'pistol';
+        myAmmo = 0;
+        scoreDisplay.textContent = 'Score: 0';
+        phaseDisplay.textContent = 'Phase 1';
+        updateWeaponDisplay();
+    } else {
+        socket.emit('resumeGame');
+        socket.emit('restart');
+    }
 });
 
 pauseMainMenuBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     hidePauseMenu();
-    if (isSinglePlayer || isHost) {
-        socket.emit('resumeGame');
+
+    if (isOfflineSinglePlayer) {
+        // Stop local game loop
+        stopLocalGameLoop();
+        localGameState = null;
+    } else {
+        if (isSinglePlayer || isHost) {
+            socket.emit('resumeGame');
+        }
+        socket.emit('leaveRoom');
     }
-    socket.emit('leaveRoom');
 
     // Reset Client State
     gameScreen.style.display = 'none';
@@ -1125,7 +1291,10 @@ pauseMainMenuBtn.addEventListener('click', (e) => {
     items = [];
     zombies = [];
     projectiles = [];
+    bloodSplatters = [];
     isSinglePlayer = false;
+    isOfflineSinglePlayer = false;
+    isPaused = false;
 
     scoreDisplay.textContent = 'Score: 0';
     phaseDisplay.textContent = 'Phase 1';
@@ -1267,7 +1436,7 @@ socket.on('zombieRoar', () => {
 });
 
 function update() {
-    const myId = socket.id;
+    const myId = isOfflineSinglePlayer ? localPlayerId : socket.id;
     const myPlayer = players[myId];
 
     let angle = 0;
@@ -1309,19 +1478,33 @@ function update() {
         playZombieSound('idle');
     }
 
-    socket.emit('playerInput', {
-        up: keys.w,
-        down: keys.s,
-        left: keys.a,
-        right: keys.d,
-        angle: angle
-    });
+    if (isOfflineSinglePlayer) {
+        // Offline mode: update local game state directly
+        if (myPlayer) {
+            myPlayer.input = {
+                up: keys.w,
+                down: keys.s,
+                left: keys.a,
+                right: keys.d
+            };
+            myPlayer.angle = angle;
+        }
+    } else {
+        // Online mode: send input to server
+        socket.emit('playerInput', {
+            up: keys.w,
+            down: keys.s,
+            left: keys.a,
+            right: keys.d,
+            angle: angle
+        });
+    }
 }
 
 function draw() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    const myId = socket.id;
+    const myId = isOfflineSinglePlayer ? localPlayerId : socket.id;
     const myPlayer = players[myId];
 
     // Camera Transform
@@ -1610,7 +1793,8 @@ function draw() {
     ctx.restore();
 
     // Off-screen zombie indicators
-    const myPlayerForIndicators = players[socket.id];
+    const myIdForIndicators = isOfflineSinglePlayer ? localPlayerId : socket.id;
+    const myPlayerForIndicators = players[myIdForIndicators];
     if (myPlayerForIndicators && myPlayerForIndicators.hp > 0) {
         const screenCenterX = canvas.width / 2;
         const screenCenterY = canvas.height / 2;
@@ -1693,10 +1877,17 @@ function draw() {
         ctx.textAlign = 'center';
         ctx.fillText('YOU DIED', canvas.width / 2, canvas.height / 2);
 
-        // Show game over screen (only once)
-        if (!isDead) {
-            isDead = true;
-            showGameOverScreen();
+        // In multiplayer, show respawn prompt - game over only when all players die
+        if (!isSinglePlayer && !isOfflineSinglePlayer) {
+            ctx.font = '24px Arial';
+            ctx.fillText('Press R or click Restart to respawn', canvas.width / 2, canvas.height / 2 + 50);
+            restartBtn.style.display = 'block';
+        } else {
+            // In single player, show game over screen (only once)
+            if (!isDead) {
+                isDead = true;
+                showGameOverScreen();
+            }
         }
     } else {
         restartBtn.style.display = 'none';
@@ -1761,16 +1952,32 @@ playAgainBtn.addEventListener('click', (e) => {
     phaseDisplay.textContent = 'Phase 1';
     updateWeaponDisplay();
 
-    // Tell server to restart me
-    socket.emit('restart');
+    if (isOfflineSinglePlayer) {
+        // Offline mode: reset local game state
+        localGameState = GameLogic.createGameState(localPlayerId, myName);
+        players = localGameState.players;
+        projectiles = localGameState.projectiles;
+        zombies = localGameState.zombies;
+        items = localGameState.items;
+        bloodSplatters = [];
+    } else {
+        // Tell server to restart me
+        socket.emit('restart');
+    }
 });
 
 // Main Menu handler
 mainMenuBtn.addEventListener('click', (e) => {
     e.stopPropagation();
 
-    // Leave room on server
-    socket.emit('leaveRoom');
+    if (isOfflineSinglePlayer) {
+        // Stop local game loop
+        stopLocalGameLoop();
+        localGameState = null;
+    } else {
+        // Leave room on server
+        socket.emit('leaveRoom');
+    }
 
     // Reset Client State
     gameOverScreen.style.display = 'none';
@@ -1791,7 +1998,9 @@ mainMenuBtn.addEventListener('click', (e) => {
     items = [];
     zombies = [];
     projectiles = [];
+    bloodSplatters = [];
     isSinglePlayer = false;
+    isOfflineSinglePlayer = false;
     isPaused = false;
 
     // Reset HUD
@@ -1831,6 +2040,186 @@ pauseMainMenuBtn.addEventListener('touchend', (e) => {
     e.preventDefault();
     pauseMainMenuBtn.click();
 });
+
+// Helper function to handle shooting in both offline and online modes
+function handleShoot() {
+    if (isOfflineSinglePlayer) {
+        // Offline mode: create projectile locally
+        const player = localGameState.players[localPlayerId];
+        if (player && player.hp > 0) {
+            const result = GameLogic.createProjectile(player, localGameState);
+            for (const proj of result.projectiles) {
+                localGameState.projectiles.push(proj);
+            }
+            if (result.weaponChanged) {
+                currentWeapon = result.newWeapon;
+                myAmmo = 0;
+                updateWeaponDisplay();
+                const msgDiv = document.createElement('div');
+                msgDiv.className = 'chatMessage system';
+                msgDiv.innerHTML = '⚠️ Out of ammo! Switched to Pistol';
+                chatMessages.appendChild(msgDiv);
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            } else if (player.weapon !== 'pistol') {
+                myAmmo = player.ammo;
+                updateWeaponDisplay();
+            }
+        }
+    } else {
+        // Online mode: emit to server
+        socket.emit('shoot');
+    }
+}
+
+// Local game loop interval for offline single player
+let localGameLoopInterval = null;
+
+function startLocalGameLoop() {
+    if (localGameLoopInterval) {
+        clearInterval(localGameLoopInterval);
+    }
+
+    // Event handlers for local game events
+    const localEvents = {
+        onHurt: (playerId) => {
+            if (playerId === localPlayerId) {
+                flashOpacity = 0.6;
+                playSound('hurt');
+            }
+        },
+        onHit: (playerId) => {
+            if (playerId === localPlayerId) {
+                playSound('hit');
+            }
+        },
+        onZombieHit: () => {
+            playZombieSound('hit');
+        },
+        onZombieDeath: (data) => {
+            for (let i = 0; i < 10 && bloodSplatters.length < MAX_BLOOD_SPLATTERS; i++) {
+                bloodSplatters.push({
+                    x: data.x + (Math.random() - 0.5) * 30,
+                    y: data.y + (Math.random() - 0.5) * 30,
+                    size: Math.random() * 6 + 3,
+                    opacity: 1,
+                    createdAt: Date.now()
+                });
+            }
+        },
+        onPlayerDeath: (data) => {
+            for (let i = 0; i < 15 && bloodSplatters.length < MAX_BLOOD_SPLATTERS; i++) {
+                bloodSplatters.push({
+                    x: data.x + (Math.random() - 0.5) * 40,
+                    y: data.y + (Math.random() - 0.5) * 40,
+                    size: Math.random() * 8 + 4,
+                    opacity: 1,
+                    createdAt: Date.now()
+                });
+            }
+            const msgDiv = document.createElement('div');
+            msgDiv.className = 'chatMessage system';
+            msgDiv.innerHTML = `💀 <span class="chatName">${escapeHtml(data.killerName)}</span> killed <span class="chatName">${escapeHtml(data.victimName)}</span>`;
+            chatMessages.appendChild(msgDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+
+            // Check if local player died
+            if (localGameState.players[localPlayerId].hp <= 0) {
+                isDead = true;
+                showGameOver();
+            }
+        },
+        onZombieRoar: () => {
+            playZombieSound('roar');
+        },
+        onPhaseChange: (data) => {
+            currentPhase = data.phase;
+            if (phaseDisplay) phaseDisplay.textContent = `Phase ${data.phase}`;
+            showPhaseMessage(data.message);
+        },
+        onPhaseClear: (data) => {
+            const msgDiv = document.createElement('div');
+            msgDiv.className = 'chatMessage system';
+            msgDiv.innerHTML = `🎉 Phase ${data.phase} Clear! Time: ${data.timeSeconds}s | Bonus: +${data.totalBonus}`;
+            chatMessages.appendChild(msgDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        },
+        onHeal: (playerId, hp) => {
+            if (playerId === localPlayerId) {
+                const msgDiv = document.createElement('div');
+                msgDiv.className = 'chatMessage system';
+                msgDiv.innerHTML = `❤️ Health restored! (${hp}/100)`;
+                chatMessages.appendChild(msgDiv);
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            }
+        },
+        onWeaponPickup: (playerId, data) => {
+            if (playerId === localPlayerId) {
+                currentWeapon = data.weapon;
+                myAmmo = data.ammo || 0;
+                const weaponName = data.weapon === 'machine_gun' ? 'Machine Gun' : 'Shotgun';
+                updateWeaponDisplay();
+                const msgDiv = document.createElement('div');
+                msgDiv.className = 'chatMessage system';
+                msgDiv.innerHTML = `🔫 Picked up ${weaponName} (${myAmmo} shots)!`;
+                chatMessages.appendChild(msgDiv);
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            }
+        }
+    };
+
+    // Run game logic at 60fps
+    localGameLoopInterval = setInterval(() => {
+        if (!localGameState || localGameState.isPaused) return;
+
+        const now = Date.now();
+        GameLogic.updateGameState(localGameState, now, localEvents);
+
+        // Sync local state to render variables
+        players = localGameState.players;
+        projectiles = localGameState.projectiles;
+        zombies = localGameState.zombies;
+        items = localGameState.items;
+
+        // Update score display
+        const player = localGameState.players[localPlayerId];
+        if (player) {
+            myScore = player.score || 0;
+            if (scoreDisplay) scoreDisplay.textContent = `Score: ${myScore}`;
+        }
+    }, 1000 / 60);
+}
+
+function stopLocalGameLoop() {
+    if (localGameLoopInterval) {
+        clearInterval(localGameLoopInterval);
+        localGameLoopInterval = null;
+    }
+}
+
+function showPhaseMessage(message) {
+    // Create a temporary phase message display
+    const existingMsg = document.querySelector('.phase-message');
+    if (existingMsg) existingMsg.remove();
+
+    const msgEl = document.createElement('div');
+    msgEl.className = 'phase-message';
+    msgEl.style.cssText = 'position:fixed;top:20%;left:50%;transform:translateX(-50%);font-size:32px;font-weight:bold;color:#fff;text-shadow:2px 2px 4px #000;z-index:1000;pointer-events:none;';
+    msgEl.textContent = message;
+    document.body.appendChild(msgEl);
+
+    setTimeout(() => msgEl.remove(), 3000);
+}
+
+function showGameOver() {
+    const player = isOfflineSinglePlayer ? localGameState.players[localPlayerId] : players[socket.id];
+    finalScoreDisplay.textContent = player ? player.score : 0;
+    finalPhaseDisplay.textContent = currentPhase;
+    myScore = player ? player.score : 0;
+
+    gameOverScreen.style.display = 'flex';
+    submitScoreSection.style.display = 'block';
+    scoreSubmittedText.style.display = 'none';
+}
 
 function gameLoop() {
     update();

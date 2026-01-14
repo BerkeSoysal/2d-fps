@@ -143,6 +143,9 @@ function createRoom(hostId, hostName, roomName, isSinglePlayer = false) {
     zombies: [],
     items: [],
 
+    // Team score for multiplayer
+    teamScore: 0,
+
     // Wave/Phase State
     currentPhase: 1,
     zombiesSpawnedThisPhase: 0,
@@ -493,7 +496,7 @@ io.on('connection', (socket) => {
     const room = getPlayerRoom(socket.id);
     if (!room) return;
 
-    // In Single Player, full restart
+    // In Single Player, full restart (reset everything)
     if (room.isSinglePlayer) {
       room.currentPhase = 1;
       room.zombies = [];
@@ -504,15 +507,16 @@ io.on('connection', (socket) => {
       room.phaseInProgress = false;
       room.phaseStartTime = Date.now();
       room.lastItemSpawnTime = Date.now();
+      room.teamScore = 0; // Reset team score for single player
 
       io.to(room.id).emit('phaseChange', { phase: 1, message: 'Restarting Game...' });
     }
+    // In Multiplayer, just respawn the player - don't reset phase or team score
 
     // Respawn Player
     const player = room.players[socket.id];
     if (player) {
       player.hp = 100;
-      player.score = 0;
       player.weapon = 'pistol';
       player.ammo = 0;
       player.vx = 0;
@@ -731,11 +735,9 @@ function updateRoom(room, now) {
           if (zombie.hp <= 0) {
             io.to(room.id).emit('zombieDeath', { x: zombie.x, y: zombie.y });
             room.zombiesKilledThisPhase++;
-            // Award 50 points to the player who killed the zombie (75 for armed zombies)
-            const killer = room.players[p.ownerId];
-            if (killer) {
-              killer.score += zombie.weapon ? 75 : 50;
-            }
+            // Award points to team score (75 for armed zombies, 50 for regular)
+            const points = zombie.weapon ? 75 : 50;
+            room.teamScore += points;
           }
           break;
         }
@@ -922,9 +924,18 @@ function updateRoom(room, now) {
 
   // 4. Phase Management & Spawning
   if (activePlayers.length === 0 && Object.keys(room.players).length > 0) {
-    // All dead?
-    // Logic: Wait for restart. Don't spawn.
+    // All players dead - trigger team game over (only once)
+    if (!room.teamGameOver) {
+      room.teamGameOver = true;
+      io.to(room.id).emit('teamGameOver', {
+        teamScore: room.teamScore,
+        phase: room.currentPhase
+      });
+    }
+    // Don't spawn or process - wait for restart
   } else {
+    // At least one player alive - clear game over flag
+    room.teamGameOver = false;
     // Valid game
     if (!room.phaseInProgress) {
       room.phaseInProgress = true;
@@ -944,10 +955,8 @@ function updateRoom(room, now) {
       const phaseBonus = room.currentPhase * 100;
       const totalBonus = timeBonus + phaseBonus;
 
-      // Award bonus to all alive players
-      for (const player of activePlayers) {
-        player.score += totalBonus;
-      }
+      // Award bonus to team score
+      room.teamScore += totalBonus;
 
       // Emit phase clear bonus info
       io.to(room.id).emit('phaseClear', {
@@ -1075,7 +1084,8 @@ function updateRoom(room, now) {
       players: room.players,
       projectiles: room.projectiles,
       zombies: room.zombies,
-      items: room.items
+      items: room.items,
+      teamScore: room.teamScore
     });
   }
 }

@@ -19,6 +19,7 @@
                 <button id="multiPlayerBtn">👥 Multiplayer</button>
             </div>
             <button id="highScoresBtn">🏆 High Scores</button>
+            <button id="helpBtn">❓ How to Play</button>
 
             <!-- Room List (shown in multiplayer mode) -->
             <div id="roomSection" style="display: none;">
@@ -150,7 +151,69 @@
         </div>
     </div>
 
+    <!-- HELP OVERLAY -->
+    <div id="helpOverlay" style="display: none;">
+        <div id="helpContent">
+            <h2>How to Play</h2>
+
+            <div id="helpSections">
+                <!-- Desktop Controls -->
+                <div class="help-section" id="desktopControls">
+                    <h3>Desktop Controls</h3>
+                    <div class="control-grid">
+                        <div class="control-item">
+                            <span class="control-key">W A S D</span>
+                            <span class="control-desc">Move</span>
+                        </div>
+                        <div class="control-item">
+                            <span class="control-key">Mouse</span>
+                            <span class="control-desc">Aim</span>
+                        </div>
+                        <div class="control-item">
+                            <span class="control-key">Click</span>
+                            <span class="control-desc">Shoot</span>
+                        </div>
+                        <div class="control-item">
+                            <span class="control-key">ESC</span>
+                            <span class="control-desc">Pause</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Mobile Controls -->
+                <div class="help-section" id="mobileControls">
+                    <h3>Mobile Controls</h3>
+                    <div class="control-grid">
+                        <div class="control-item">
+                            <span class="control-key">Left Stick</span>
+                            <span class="control-desc">Move</span>
+                        </div>
+                        <div class="control-item">
+                            <span class="control-key">Right Stick</span>
+                            <span class="control-desc">Aim + Shoot</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Game Tips -->
+                <div class="help-section">
+                    <h3>Tips</h3>
+                    <ul class="tips-list">
+                        <li>Survive 10 phases of zombies</li>
+                        <li>Pick up weapons and health packs</li>
+                        <li>Armed zombies appear from Phase 3</li>
+                        <li>Clear phases fast for bonus points</li>
+                    </ul>
+                </div>
+            </div>
+
+            <button id="closeHelpBtn">Got it!</button>
+            <p class="help-hint">Click anywhere or press any key to close</p>
+        </div>
+    </div>
+
     <script src="/socket.io/socket.io.js"></script>
+    <script src="gameLogic.js"></script>
     <script src="game.js"></script>
 </body>
 
