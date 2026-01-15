@@ -99,7 +99,7 @@ const MAX_SPEED = 5;
 const ACCELERATION = 0.5;
 const FRICTION = 0.85; // Deceleration multiplier (lower = more friction)
 const PROJECTILE_SPEED = 18;
-const ZOMBIE_SPEED = 2; // Default, can be overridden per phase
+const ZOMBIE_SPEED = 2.2; // Default base speed
 const CANVAS_WIDTH = 2000;
 const CANVAS_HEIGHT = 1200;
 const ZOMBIE_SPAWN_INTERVAL = 500;
@@ -108,15 +108,23 @@ const MAX_PHASE = 10;
 const ZOMBIE_HEARING_RADIUS = 150; // Zombies can hear bullets within this range
 const ZOMBIE_ALERT_DURATION = 5000; // How long zombies stay alerted (ms)
 
+// Zombie lunge/jump attack
+const ZOMBIE_LUNGE_DISTANCE = 120; // Distance to trigger lunge
+const ZOMBIE_LUNGE_SPEED = 8; // Speed during lunge (slower for player reaction time)
+const ZOMBIE_LUNGE_DURATION = 250; // Lunge duration in ms (slightly longer)
+const ZOMBIE_LUNGE_REST = 600; // Rest period after lunge where zombie pauses
+const ZOMBIE_LUNGE_COOLDOWN = 2000; // Cooldown between lunges
+
 // Weapon constants
 const WEAPONS = {
   pistol: { damage: 10, speed: 18, range: 1000, spread: 0 },
   machine_gun: { damage: 12, speed: 20, range: 800, spread: 0.1, maxAmmo: 50 },
-  shotgun: { damage: 25, speed: 15, range: 300, spread: 0.4, pellets: 5, maxAmmo: 12 }
+  shotgun: { damage: 25, speed: 15, range: 300, spread: 0.4, pellets: 5, maxAmmo: 12 },
+  sniper: { damage: 1000, speed: 30, range: 2000, spread: 0, maxAmmo: 3, fireRate: 1000 }
 };
 
 // Item spawn settings
-const ITEM_TYPES = ['health', 'machine_gun', 'shotgun'];
+const ITEM_TYPES = ['health', 'machine_gun', 'shotgun', 'sniper'];
 const ITEM_SPAWN_INTERVAL = 15000; // 15 seconds
 const MAX_ITEMS = 5;
 let itemIdCounter = 0;
@@ -450,6 +458,15 @@ io.on('connection', (socket) => {
 
     const weapon = WEAPONS[player.weapon] || WEAPONS.pistol;
 
+    // Fire rate limit for sniper
+    if (weapon.fireRate) {
+      const now = Date.now();
+      if (player.lastShotTime && now - player.lastShotTime < weapon.fireRate) {
+        return; // Can't shoot yet
+      }
+      player.lastShotTime = now;
+    }
+
     // Check ammo for special weapons
     if (player.weapon !== 'pistol') {
       if (player.ammo <= 0) {
@@ -462,6 +479,9 @@ io.on('connection', (socket) => {
       player.ammo--;
       io.to(socket.id).emit('ammoUpdate', { ammo: player.ammo });
     }
+
+    // Broadcast shot event for muzzle flash (to other players)
+    socket.to(room.id).emit('playerShot', { playerId: socket.id });
 
     // Shotgun fires multiple pellets
     if (player.weapon === 'shotgun') {
@@ -791,9 +811,47 @@ function updateRoom(room, now) {
       const dist = Math.sqrt(dx * dx + dy * dy);
 
       if (dist > 0) {
-        const speed = zombie.speed || ZOMBIE_SPEED;
-        const newX = zombie.x + (dx / dist) * speed;
-        const newY = zombie.y + (dy / dist) * speed;
+        let speed = zombie.speed || ZOMBIE_SPEED;
+        let moveX = dx / dist;
+        let moveY = dy / dist;
+
+        // Lunge attack for unarmed zombies
+        if (!zombie.weapon) {
+          // Check if currently lunging
+          if (zombie.lungeStartTime && now - zombie.lungeStartTime < ZOMBIE_LUNGE_DURATION) {
+            // During lunge - use stored lunge direction and high speed
+            speed = ZOMBIE_LUNGE_SPEED;
+            moveX = zombie.lungeDirX;
+            moveY = zombie.lungeDirY;
+          } else if (zombie.lungeStartTime && now - zombie.lungeStartTime >= ZOMBIE_LUNGE_DURATION) {
+            // Lunge just ended - start rest period
+            zombie.lungeStartTime = null;
+            zombie.restStartTime = now;
+          } else if (zombie.restStartTime && now - zombie.restStartTime < ZOMBIE_LUNGE_REST) {
+            // Resting after lunge - zombie pauses to recover
+            speed = 0;
+          } else if (zombie.restStartTime && now - zombie.restStartTime >= ZOMBIE_LUNGE_REST) {
+            // Rest period ended - set cooldown and resume normal behavior
+            zombie.restStartTime = null;
+            zombie.lastLungeTime = now;
+          } else if (dist <= ZOMBIE_LUNGE_DISTANCE && dist > 25) {
+            // In lunge range - check cooldown and start lunge
+            if (!zombie.lastLungeTime || now - zombie.lastLungeTime > ZOMBIE_LUNGE_COOLDOWN) {
+              // Start lunge!
+              zombie.lungeStartTime = now;
+              zombie.lungeDirX = dx / dist;
+              zombie.lungeDirY = dy / dist;
+              speed = ZOMBIE_LUNGE_SPEED;
+              moveX = zombie.lungeDirX;
+              moveY = zombie.lungeDirY;
+              // Emit lunge event for client animation
+              io.to(room.id).emit('zombieLunge', { id: zombie.id, x: zombie.x, y: zombie.y });
+            }
+          }
+        }
+
+        const newX = zombie.x + moveX * speed;
+        const newY = zombie.y + moveY * speed;
 
         // Check wall collision before moving
         if (!checkWallCollision(newX, zombie.y, 15)) {
@@ -1068,6 +1126,10 @@ function updateRoom(room, now) {
             player.weapon = 'shotgun';
             player.ammo = WEAPONS.shotgun.maxAmmo;
             io.to(player.playerId).emit('weaponPickup', { weapon: 'shotgun', ammo: player.ammo });
+          } else if (item.type === 'sniper') {
+            player.weapon = 'sniper';
+            player.ammo = WEAPONS.sniper.maxAmmo;
+            io.to(player.playerId).emit('weaponPickup', { weapon: 'sniper', ammo: player.ammo });
           }
           room.items.splice(i, 1);
           break;

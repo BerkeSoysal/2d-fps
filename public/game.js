@@ -534,10 +534,14 @@ window.addEventListener('mousedown', (e) => {
     // Auto-fire for machine gun
     if (currentWeapon === 'machine_gun') {
         autoFireInterval = setInterval(() => {
-            if (isMouseDown && currentWeapon === 'machine_gun') {
-                handleShoot();
-                playSound('shoot');
+            // Stop if no longer holding, weapon changed, or out of ammo
+            if (!isMouseDown || currentWeapon !== 'machine_gun' || myAmmo <= 0) {
+                clearInterval(autoFireInterval);
+                autoFireInterval = null;
+                return;
             }
+            handleShoot();
+            playSound('shoot');
         }, 100); // Fire every 100ms
     }
 });
@@ -809,12 +813,23 @@ if (rightJoystickZone) {
         handleShoot();
         playSound('shoot');
 
+        const fireRate = currentWeapon === 'machine_gun' ? 100 : (currentWeapon === 'shotgun' ? 400 : (currentWeapon === 'sniper' ? 1000 : 250));
         mobileAutoFireInterval = setInterval(() => {
-            if (rightJoystickActive) {
-                handleShoot();
-                playSound('shoot');
+            // Stop if joystick released or out of ammo (for non-pistol weapons)
+            if (!rightJoystickActive) {
+                clearInterval(mobileAutoFireInterval);
+                mobileAutoFireInterval = null;
+                return;
             }
-        }, currentWeapon === 'machine_gun' ? 100 : (currentWeapon === 'shotgun' ? 400 : 250));
+            // Stop auto-fire if weapon needs ammo and we're out
+            if (currentWeapon !== 'pistol' && myAmmo <= 0) {
+                clearInterval(mobileAutoFireInterval);
+                mobileAutoFireInterval = null;
+                return;
+            }
+            handleShoot();
+            playSound('shoot');
+        }, fireRate);
     }, { passive: false });
 
     rightJoystickZone.addEventListener('touchmove', (e) => {
@@ -958,6 +973,25 @@ let myScore = 0;
 let bloodSplatters = [];
 const MAX_BLOOD_SPLATTERS = 300; // Limit for performance
 
+// Muzzle flash effect
+const muzzleFlashes = {}; // playerId -> timestamp
+const MUZZLE_FLASH_DURATION = 80; // milliseconds
+
+// Handle other players shooting (for muzzle flash)
+socket.on('playerShot', (data) => {
+    muzzleFlashes[data.playerId] = Date.now();
+});
+
+// Walk animation state
+const walkAnimations = {}; // playerId -> { phase, lastX, lastY, dustTimer }
+const WALK_BOB_SPEED = 0.4; // How fast the bob cycles
+const WALK_BOB_AMOUNT = 2; // Pixels of vertical bob
+const WALK_TILT_AMOUNT = 0.05; // Radians of body tilt
+
+// Dust particles for walking
+let dustParticles = [];
+const MAX_DUST_PARTICLES = 50;
+
 // Handle player death - create blood splatter
 socket.on('playerDeath', (data) => {
     // Create blood particles at death location (with limit)
@@ -990,6 +1024,21 @@ socket.on('teamGameOver', (data) => {
         isDead = true;
         showGameOverScreen();
     }
+});
+
+// Zombie lunge tracking for visual effects
+const zombieLunges = {}; // zombieId -> { startTime, x, y }
+const ZOMBIE_LUNGE_VISUAL_DURATION = 250;
+
+// Handle zombie lunge event
+socket.on('zombieLunge', (data) => {
+    zombieLunges[data.id] = {
+        startTime: Date.now(),
+        x: data.x,
+        y: data.y
+    };
+    // Play a lunge sound effect
+    playSound('zombieLunge');
 });
 
 // Assets - Player skins (pistol)
@@ -1066,6 +1115,26 @@ playerSkinsShotgun.soldier1.src = 'kenney_top-down-shooter/PNG/Soldier 1/soldier
 playerSkinsShotgun.survivor1.src = 'kenney_top-down-shooter/PNG/Survivor 1/survivor1_silencer.png';
 playerSkinsShotgun.womanGreen.src = 'kenney_top-down-shooter/PNG/Woman Green/womanGreen_silencer.png';
 
+// Player skins with sniper (using machine sprite for longer weapon look)
+const playerSkinsSniper = {
+    hitman1: new Image(),
+    manBlue: new Image(),
+    manBrown: new Image(),
+    manOld: new Image(),
+    robot1: new Image(),
+    soldier1: new Image(),
+    survivor1: new Image(),
+    womanGreen: new Image()
+};
+playerSkinsSniper.hitman1.src = 'kenney_top-down-shooter/PNG/Hitman 1/hitman1_machine.png';
+playerSkinsSniper.manBlue.src = 'kenney_top-down-shooter/PNG/Man Blue/manBlue_machine.png';
+playerSkinsSniper.manBrown.src = 'kenney_top-down-shooter/PNG/Man Brown/manBrown_machine.png';
+playerSkinsSniper.manOld.src = 'kenney_top-down-shooter/PNG/Man Old/manOld_machine.png';
+playerSkinsSniper.robot1.src = 'kenney_top-down-shooter/PNG/Robot 1/robot1_machine.png';
+playerSkinsSniper.soldier1.src = 'kenney_top-down-shooter/PNG/Soldier 1/soldier1_machine.png';
+playerSkinsSniper.survivor1.src = 'kenney_top-down-shooter/PNG/Survivor 1/survivor1_machine.png';
+playerSkinsSniper.womanGreen.src = 'kenney_top-down-shooter/PNG/Woman Green/womanGreen_machine.png';
+
 // Item chest sprite
 const chestSprite = new Image();
 chestSprite.src = 'kenney_top-down-shooter/PNG/Tiles/tile_129.png';
@@ -1106,10 +1175,12 @@ decorationTiles.crate.src = 'kenney_top-down-shooter/PNG/Tiles/tile_129.png';
 const itemSprites = {
     machine_gun: new Image(),
     shotgun: new Image(),
+    sniper: new Image(),
     health: new Image()
 };
 itemSprites.machine_gun.src = 'kenney_top-down-shooter/PNG/weapon_machine.png';
 itemSprites.shotgun.src = 'kenney_top-down-shooter/PNG/weapon_silencer.png';
+itemSprites.sniper.src = 'kenney_top-down-shooter/PNG/weapon_gun.png';
 itemSprites.health.src = 'kenney_top-down-shooter/PNG/Tiles/tile_129.png'; // Crate for health
 
 let decorations = [];
@@ -1160,7 +1231,7 @@ socket.on('zombieDeath', (data) => {
 socket.on('weaponPickup', (data) => {
     currentWeapon = data.weapon;
     myAmmo = data.ammo || 0;
-    const weaponName = data.weapon === 'machine_gun' ? 'Machine Gun' : 'Shotgun';
+    const weaponName = data.weapon === 'machine_gun' ? 'Machine Gun' : (data.weapon === 'sniper' ? 'Sniper' : 'Shotgun');
 
     // Update weapon display
     updateWeaponDisplay();
@@ -1204,6 +1275,9 @@ function updateWeaponDisplay() {
     } else if (currentWeapon === 'shotgun') {
         displayText = `🔫 Shotgun (${myAmmo})`;
         className = 'shotgun';
+    } else if (currentWeapon === 'sniper') {
+        displayText = `🎯 Sniper (${myAmmo})`;
+        className = 'sniper';
     } else {
         displayText = '🔫 Pistol ∞';
         className = '';
@@ -1271,6 +1345,7 @@ pauseRestartBtn.addEventListener('click', (e) => {
         zombies = localGameState.zombies;
         items = localGameState.items;
         bloodSplatters = [];
+        dustParticles = [];
         isDead = false;
         myScore = 0;
         currentPhase = 1;
@@ -1319,6 +1394,7 @@ pauseMainMenuBtn.addEventListener('click', (e) => {
     zombies = [];
     projectiles = [];
     bloodSplatters = [];
+    dustParticles = [];
     isSinglePlayer = false;
     isOfflineSinglePlayer = false;
     isPaused = false;
@@ -1342,6 +1418,20 @@ const zombieSounds = {
         new Audio('sounds/445992__breviceps__zombie-gargles-3.wav')
     ]
 };
+
+// Gun sounds
+const gunSounds = {
+    pistol: new Audio('sounds/gun-shot-359196.mp3'),
+    shotgun: new Audio('sounds/doom-shotgun-2017-80549.mp3'),
+    machine_gun: new Audio('sounds/069321_light-machine-gun-m249-39814.mp3'),
+    sniper: new Audio('sounds/gun-shot-359196.mp3') // Use same as pistol but with different settings
+};
+
+// Preload and configure gun sounds
+Object.values(gunSounds).forEach(sound => {
+    sound.volume = 0.4;
+    sound.preload = 'auto';
+});
 
 // Set volume for zombie sounds
 zombieSounds.hit.volume = 0.3;
@@ -1385,35 +1475,43 @@ function playSound(type) {
     }
 
     if (type === 'shoot') {
-        // Gunshot sound - short noise burst
-        const bufferSize = audioCtx.sampleRate * 0.1; // 100ms
-        const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
-        const data = buffer.getChannelData(0);
+        // Play actual gun sound based on current weapon
+        const soundSource = gunSounds[currentWeapon] || gunSounds.pistol;
+        const sound = soundSource.cloneNode();
 
-        for (let i = 0; i < bufferSize; i++) {
-            // White noise with decay
-            data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufferSize, 3);
+        // Set volume, playback rate, and start time based on weapon
+        let startTime = 0;
+        let duration = 250;
+
+        if (currentWeapon === 'sniper') {
+            sound.volume = 0.5;
+            sound.playbackRate = 0.8; // Lower pitch for sniper
+            startTime = 0.1;
+            duration = 1000;
+        } else if (currentWeapon === 'shotgun') {
+            sound.volume = 0.5;
+            sound.playbackRate = 1.0;
+            duration = 600;
+        } else if (currentWeapon === 'machine_gun') {
+            sound.volume = 0.3;
+            sound.playbackRate = 1.2;
+            duration = 150;
+        } else {
+            // Pistol
+            sound.volume = 0.4;
+            sound.playbackRate = 1.0;
+            startTime = 0.1;
+            duration = 1000;
         }
 
-        const noise = audioCtx.createBufferSource();
-        noise.buffer = buffer;
+        sound.currentTime = startTime;
+        sound.play().catch(() => {});
 
-        const gainNode = audioCtx.createGain();
-        gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
-        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
-
-        // Low pass filter for more punch
-        const filter = audioCtx.createBiquadFilter();
-        filter.type = 'lowpass';
-        filter.frequency.setValueAtTime(2000, audioCtx.currentTime);
-        filter.frequency.exponentialRampToValueAtTime(500, audioCtx.currentTime + 0.1);
-
-        noise.connect(filter);
-        filter.connect(gainNode);
-        gainNode.connect(audioCtx.destination);
-
-        noise.start();
-        noise.stop(audioCtx.currentTime + 0.1);
+        // Stop after short duration to not play full audio
+        setTimeout(() => {
+            sound.pause();
+            sound.currentTime = 0;
+        }, duration);
         return;
     }
 
@@ -1441,6 +1539,16 @@ function playSound(type) {
         gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
         osc.start();
         osc.stop(audioCtx.currentTime + 0.3);
+    } else if (type === 'zombieLunge') {
+        // Aggressive rushing growl for zombie lunge
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(80, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(200, audioCtx.currentTime + 0.1);
+        osc.frequency.exponentialRampToValueAtTime(60, audioCtx.currentTime + 0.2);
+        gainNode.gain.setValueAtTime(0.25, audioCtx.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.2);
     }
 }
 
@@ -1534,12 +1642,16 @@ function draw() {
     const myId = isOfflineSinglePlayer ? localPlayerId : socket.id;
     const myPlayer = players[myId];
 
-    // Camera Transform
+    // Camera Transform with zoom for sniper
     ctx.save();
     if (myPlayer) {
-        const camX = -myPlayer.x + canvas.width / 2;
-        const camY = -myPlayer.y + canvas.height / 2;
-        ctx.translate(camX, camY);
+        // Sniper zooms out to see more of the map
+        const zoomScale = currentWeapon === 'sniper' ? 0.6 : 1.0;
+
+        // Translate to center, scale, then translate to player position
+        ctx.translate(canvas.width / 2, canvas.height / 2);
+        ctx.scale(zoomScale, zoomScale);
+        ctx.translate(-myPlayer.x, -myPlayer.y);
     }
 
     // Draw Grass Background (tiled)
@@ -1596,6 +1708,28 @@ function draw() {
         ctx.fillStyle = `rgba(139, 0, 0, ${opacity * 0.8})`; // Dark red
         ctx.beginPath();
         ctx.arc(blood.x, blood.y, blood.size, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // Draw and update dust particles (walking effect)
+    for (let i = dustParticles.length - 1; i >= 0; i--) {
+        const dust = dustParticles[i];
+
+        // Update dust
+        dust.x += dust.vx;
+        dust.y += dust.vy;
+        dust.life -= 0.03;
+        dust.size *= 0.98;
+
+        if (dust.life <= 0 || dust.size < 0.5) {
+            dustParticles.splice(i, 1);
+            continue;
+        }
+
+        // Draw dust
+        ctx.fillStyle = `rgba(180, 160, 140, ${dust.life * dust.opacity})`;
+        ctx.beginPath();
+        ctx.arc(dust.x, dust.y, dust.size, 0, Math.PI * 2);
         ctx.fill();
     }
 
@@ -1665,13 +1799,39 @@ function draw() {
         ctx.translate(zombie.x, zombie.y);
         ctx.rotate(zombie.angle);
 
+        // Check if zombie is lunging for visual effect
+        const lungeData = zombieLunges[zombie.id];
+        let isLunging = false;
+        let lungeProgress = 0;
+        if (lungeData && Date.now() - lungeData.startTime < ZOMBIE_LUNGE_VISUAL_DURATION) {
+            isLunging = true;
+            lungeProgress = (Date.now() - lungeData.startTime) / ZOMBIE_LUNGE_VISUAL_DURATION;
+        } else if (lungeData) {
+            // Clean up old lunge data
+            delete zombieLunges[zombie.id];
+        }
+
+        // Scale up during lunge
+        if (isLunging) {
+            const scale = 1 + Math.sin(lungeProgress * Math.PI) * 0.3; // Bulge out then back
+            ctx.scale(scale, scale);
+        }
+
         // Use correct sprite based on weapon
         const zombieSprite = zombieSprites[zombie.weapon || 'none'] || zombieSprites.none;
         if (zombieSprite && zombieSprite.complete) {
             ctx.drawImage(zombieSprite, -25, -20, 50, 40);
+
+            // Add red tint overlay during lunge
+            if (isLunging) {
+                ctx.globalAlpha = 0.4 * Math.sin(lungeProgress * Math.PI);
+                ctx.fillStyle = '#ff0000';
+                ctx.fillRect(-25, -20, 50, 40);
+                ctx.globalAlpha = 1;
+            }
         } else {
             // Fallback green circle
-            ctx.fillStyle = '#2ecc71';
+            ctx.fillStyle = isLunging ? '#ff4444' : '#2ecc71';
             ctx.beginPath();
             ctx.arc(0, 0, 15, 0, Math.PI * 2);
             ctx.fill();
@@ -1741,9 +1901,51 @@ function draw() {
         const p = players[id];
         if (p.hp <= 0) continue; // Don't draw dead players
 
+        // Initialize walk animation state for this player
+        if (!walkAnimations[id]) {
+            walkAnimations[id] = { phase: 0, lastX: p.x, lastY: p.y, dustTimer: 0 };
+        }
+        const walkAnim = walkAnimations[id];
+
+        // Check if player is moving
+        const dx = p.x - walkAnim.lastX;
+        const dy = p.y - walkAnim.lastY;
+        const isMoving = Math.abs(dx) > 0.1 || Math.abs(dy) > 0.1;
+        const moveSpeed = Math.sqrt(dx * dx + dy * dy);
+
+        // Update walk animation phase
+        if (isMoving) {
+            walkAnim.phase += WALK_BOB_SPEED * (moveSpeed / 3);
+            walkAnim.dustTimer += moveSpeed;
+
+            // Spawn dust particles
+            if (walkAnim.dustTimer > 15 && dustParticles.length < MAX_DUST_PARTICLES) {
+                dustParticles.push({
+                    x: p.x - dx * 0.5 + (Math.random() - 0.5) * 10,
+                    y: p.y - dy * 0.5 + (Math.random() - 0.5) * 10,
+                    size: Math.random() * 4 + 2,
+                    opacity: 0.4,
+                    vx: -dx * 0.1 + (Math.random() - 0.5) * 0.5,
+                    vy: -dy * 0.1 + (Math.random() - 0.5) * 0.5,
+                    life: 1
+                });
+                walkAnim.dustTimer = 0;
+            }
+        } else {
+            // Smoothly return to neutral
+            walkAnim.phase *= 0.9;
+        }
+
+        walkAnim.lastX = p.x;
+        walkAnim.lastY = p.y;
+
+        // Calculate bob and tilt
+        const bobOffset = Math.sin(walkAnim.phase) * WALK_BOB_AMOUNT * (isMoving ? 1 : 0);
+        const tiltOffset = Math.sin(walkAnim.phase * 0.5) * WALK_TILT_AMOUNT * (isMoving ? 1 : 0);
+
         ctx.save();
-        ctx.translate(p.x, p.y);
-        ctx.rotate(p.angle);
+        ctx.translate(p.x, p.y + bobOffset);
+        ctx.rotate(p.angle + tiltOffset);
 
         // Draw Player Sprite using their assigned skin and weapon
         let spriteToUse;
@@ -1751,10 +1953,44 @@ function draw() {
             spriteToUse = playerSkinsMachine[p.skin];
         } else if (p.weapon === 'shotgun' && playerSkinsShotgun[p.skin]) {
             spriteToUse = playerSkinsShotgun[p.skin];
+        } else if (p.weapon === 'sniper' && playerSkinsSniper[p.skin]) {
+            spriteToUse = playerSkinsSniper[p.skin];
         } else {
             spriteToUse = playerSkins[p.skin] || playerSkins.hitman1;
         }
         ctx.drawImage(spriteToUse, -25, -20, 50, 40); // Centered approx
+
+        // Draw Muzzle Flash
+        const flashTime = muzzleFlashes[id];
+        if (flashTime && Date.now() - flashTime < MUZZLE_FLASH_DURATION) {
+            const flashProgress = (Date.now() - flashTime) / MUZZLE_FLASH_DURATION;
+            const flashSize = 15 * (1 - flashProgress * 0.5); // Shrinks over time
+            const flashOpacity = 1 - flashProgress;
+
+            // Flash at gun muzzle position (front of player)
+            ctx.save();
+            ctx.translate(28, 0); // Muzzle is at front of gun
+
+            // Outer glow
+            const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, flashSize * 1.5);
+            gradient.addColorStop(0, `rgba(255, 255, 200, ${flashOpacity})`);
+            gradient.addColorStop(0.3, `rgba(255, 200, 50, ${flashOpacity * 0.8})`);
+            gradient.addColorStop(0.6, `rgba(255, 100, 0, ${flashOpacity * 0.4})`);
+            gradient.addColorStop(1, 'rgba(255, 50, 0, 0)');
+
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.arc(0, 0, flashSize * 1.5, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Inner bright core
+            ctx.fillStyle = `rgba(255, 255, 255, ${flashOpacity})`;
+            ctx.beginPath();
+            ctx.arc(0, 0, flashSize * 0.4, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.restore();
+        }
 
         ctx.restore();
 
@@ -1988,6 +2224,7 @@ playAgainBtn.addEventListener('click', (e) => {
         zombies = localGameState.zombies;
         items = localGameState.items;
         bloodSplatters = [];
+        dustParticles = [];
     } else {
         // Tell server to restart me
         socket.emit('restart');
@@ -2027,6 +2264,7 @@ mainMenuBtn.addEventListener('click', (e) => {
     zombies = [];
     projectiles = [];
     bloodSplatters = [];
+    dustParticles = [];
     isSinglePlayer = false;
     isOfflineSinglePlayer = false;
     isPaused = false;
@@ -2071,6 +2309,10 @@ pauseMainMenuBtn.addEventListener('touchend', (e) => {
 
 // Helper function to handle shooting in both offline and online modes
 function handleShoot() {
+    // Trigger muzzle flash for local player
+    const myId = isOfflineSinglePlayer ? localPlayerId : socket.id;
+    muzzleFlashes[myId] = Date.now();
+
     if (isOfflineSinglePlayer) {
         // Offline mode: create projectile locally
         const player = localGameState.players[localPlayerId];
@@ -2159,6 +2401,14 @@ function startLocalGameLoop() {
         onZombieRoar: () => {
             playZombieSound('roar');
         },
+        onZombieLunge: (zombieId, x, y) => {
+            zombieLunges[zombieId] = {
+                startTime: Date.now(),
+                x: x,
+                y: y
+            };
+            playSound('zombieLunge');
+        },
         onPhaseChange: (data) => {
             currentPhase = data.phase;
             if (phaseDisplay) phaseDisplay.textContent = `Phase ${data.phase}`;
@@ -2184,7 +2434,7 @@ function startLocalGameLoop() {
             if (playerId === localPlayerId) {
                 currentWeapon = data.weapon;
                 myAmmo = data.ammo || 0;
-                const weaponName = data.weapon === 'machine_gun' ? 'Machine Gun' : 'Shotgun';
+                const weaponName = data.weapon === 'machine_gun' ? 'Machine Gun' : (data.weapon === 'sniper' ? 'Sniper' : 'Shotgun');
                 updateWeaponDisplay();
                 const msgDiv = document.createElement('div');
                 msgDiv.className = 'chatMessage system';
