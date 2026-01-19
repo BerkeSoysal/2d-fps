@@ -732,6 +732,27 @@ canvas {
     transform: scale(1.05);
 }
 
+#shareOnXBtn {
+    margin-top: 15px;
+    padding: 10px 20px;
+    font-size: 14px;
+    border: none;
+    border-radius: 8px;
+    background: #000;
+    color: white;
+    cursor: pointer;
+    font-weight: bold;
+    transition: transform 0.2s, background 0.2s;
+    pointer-events: auto;
+    position: relative;
+    z-index: 2001;
+}
+
+#shareOnXBtn:hover {
+    transform: scale(1.05);
+    background: #333;
+}
+
 /* High Scores Screen */
 #highScoresScreen {
     position: fixed;

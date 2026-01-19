@@ -2,6 +2,9 @@ const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 const socket = io();
 
+// Mobile detection (early for performance constants)
+const isMobile = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+
 canvas.width = window.innerWidth;
 canvas.height = window.innerHeight;
 
@@ -16,6 +19,7 @@ const lobbyScreen = document.getElementById('lobbyScreen');
 const gameScreen = document.getElementById('gameScreen');
 const playerNameInput = document.getElementById('playerNameInput');
 const singlePlayerBtn = document.getElementById('singlePlayerBtn');
+const trainingModeBtn = document.getElementById('trainingModeBtn');
 const multiPlayerBtn = document.getElementById('multiPlayerBtn');
 const roomSection = document.getElementById('roomSection');
 const roomList = document.getElementById('roomList');
@@ -40,6 +44,7 @@ const submitScoreSection = document.getElementById('submitScoreSection');
 const scoreSubmittedText = document.getElementById('scoreSubmitted');
 const playAgainBtn = document.getElementById('playAgainBtn');
 const mainMenuBtn = document.getElementById('mainMenuBtn');
+const shareOnXBtn = document.getElementById('shareOnXBtn');
 
 // High Scores elements
 const highScoresScreen = document.getElementById('highScoresScreen');
@@ -67,28 +72,110 @@ let isHost = false;
 let isDead = false;
 let currentPhase = 1;
 let scoreSubmitted = false;
+let scoreToken = null; // Token for verified score submission
 let myAmmo = 0;
 let isSinglePlayer = false;
 let isPaused = false;
 
 // Offline single player state
 let isOfflineSinglePlayer = false;
+let isTrainingMode = false;
 let localGameState = null;
 let localPlayerId = 'local_player';
 
-// Single Player - now runs offline without WebSocket
-singlePlayerBtn.addEventListener('click', () => {
+// Single Player - verified mode with server-side replay verification
+let singlePlayerSessionId = null;
+
+singlePlayerBtn.addEventListener('click', async () => {
+    myName = playerNameInput.value.trim() || 'Player';
+
+    // Show loading state
+    singlePlayerBtn.disabled = true;
+    singlePlayerBtn.textContent = 'Starting...';
+
+    try {
+        // Get seed from server for verified play
+        const response = await fetch('/api/singleplayer/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ playerName: myName })
+        });
+
+        if (!response.ok) {
+            throw new Error('Failed to start session');
+        }
+
+        const data = await response.json();
+        singlePlayerSessionId = data.sessionId;
+
+        isSinglePlayer = true;
+        isOfflineSinglePlayer = true;
+
+        // Initialize local game state with server-provided seed
+        localGameState = GameLogic.createGameState(localPlayerId, myName, data.seed);
+
+        // Set up map data from shared module
+        walls = GameLogic.buildingWalls;
+        floors = GameLogic.floors;
+        decorations = GameLogic.decorations;
+        backgroundRendered = false; // Reset to re-render background
+
+        // Initialize game variables
+        players = localGameState.players;
+        projectiles = localGameState.projectiles;
+        zombies = localGameState.zombies;
+        items = localGameState.items;
+
+        // Start game
+        gameJoined = true;
+        isDead = false;
+        scoreSubmitted = false;
+        scoreToken = null;
+        currentPhase = 1;
+
+        // Show game screen
+        homeScreen.style.display = 'none';
+        gameScreen.style.display = 'block';
+        gameOverScreen.style.display = 'none';
+
+        // Update UI
+        if (scoreDisplay) scoreDisplay.textContent = 'Score: 0';
+        if (phaseDisplay) phaseDisplay.textContent = 'Phase 1';
+        updateWeaponDisplay();
+
+        // Start local game loop
+        startLocalGameLoop();
+
+        // Show help for first-time players
+        if (!hasSeenHelp()) {
+            showHelpOverlay();
+        }
+
+    } catch (err) {
+        console.error('Failed to start single player:', err);
+        alert('Failed to connect to server. Please try again.');
+    } finally {
+        singlePlayerBtn.disabled = false;
+        singlePlayerBtn.textContent = 'Single Player';
+    }
+});
+
+// Training Mode - weapons available, zombies don't move
+trainingModeBtn.addEventListener('click', () => {
     myName = playerNameInput.value.trim() || 'Player';
     isSinglePlayer = true;
     isOfflineSinglePlayer = true;
+    isTrainingMode = true;
 
     // Initialize local game state using shared game logic
     localGameState = GameLogic.createGameState(localPlayerId, myName);
+    localGameState.isTrainingMode = true;
 
     // Set up map data from shared module
     walls = GameLogic.buildingWalls;
     floors = GameLogic.floors;
     decorations = GameLogic.decorations;
+    backgroundRendered = false; // Reset to re-render background
 
     // Initialize game variables
     players = localGameState.players;
@@ -96,10 +183,36 @@ singlePlayerBtn.addEventListener('click', () => {
     zombies = localGameState.zombies;
     items = localGameState.items;
 
+    // Spawn all weapon types in the house
+    const houseWeapons = [
+        { type: 'machine_gun', x: 700, y: 500 },
+        { type: 'shotgun', x: 800, y: 500 }
+    ];
+    houseWeapons.forEach((w, i) => {
+        items.push({ id: 'training_weapon_' + i, type: w.type, x: w.x, y: w.y });
+    });
+
+    // Spawn initial training zombies (stationary)
+    for (let i = 0; i < 10; i++) {
+        const zx = 200 + Math.random() * 1600;
+        const zy = 100 + Math.random() * 1000;
+        zombies.push({
+            id: 'training_z_' + i,
+            x: zx,
+            y: zy,
+            angle: Math.random() * Math.PI * 2,
+            hp: 30,
+            targetId: null,
+            speed: 0, // Stationary
+            isTrainingZombie: true
+        });
+    }
+
     // Start game
     gameJoined = true;
     isDead = false;
     scoreSubmitted = false;
+    scoreToken = null;
     currentPhase = 1;
 
     // Show game screen
@@ -108,17 +221,12 @@ singlePlayerBtn.addEventListener('click', () => {
     gameOverScreen.style.display = 'none';
 
     // Update UI
-    if (scoreDisplay) scoreDisplay.textContent = 'Score: 0';
-    if (phaseDisplay) phaseDisplay.textContent = 'Phase 1';
+    if (scoreDisplay) scoreDisplay.textContent = 'Training Mode';
+    if (phaseDisplay) phaseDisplay.textContent = '🎯 Training';
     updateWeaponDisplay();
 
     // Start local game loop
     startLocalGameLoop();
-
-    // Show help for first-time players
-    if (!hasSeenHelp()) {
-        showHelpOverlay();
-    }
 });
 
 // Multiplayer - show room list
@@ -552,12 +660,10 @@ window.addEventListener('mouseup', () => {
         clearInterval(autoFireInterval);
         autoFireInterval = null;
     }
+    stopMachineGunSound();
 });
 
 // ==================== MOBILE TOUCH CONTROLS ====================
-
-// Mobile detection
-const isMobile = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
 
 // Mobile control elements
 const mobileControls = document.getElementById('mobileControls');
@@ -590,7 +696,7 @@ let manualAimAngle = 0;
 let isManualAiming = false;
 let mobileAutoFireInterval = null;
 let lastAutoAimUpdate = 0;
-const AUTO_AIM_THROTTLE = 100; // Only update auto-aim every 100ms
+const AUTO_AIM_THROTTLE = 150; // Only update auto-aim every 150ms (reduced for performance)
 
 // Joystick constants
 const KNOB_MAX_DISTANCE = 55;
@@ -813,7 +919,7 @@ if (rightJoystickZone) {
         handleShoot();
         playSound('shoot');
 
-        const fireRate = currentWeapon === 'machine_gun' ? 100 : (currentWeapon === 'shotgun' ? 400 : (currentWeapon === 'sniper' ? 1000 : 250));
+        const fireRate = currentWeapon === 'machine_gun' ? 100 : (currentWeapon === 'shotgun' ? 400 : 250);
         mobileAutoFireInterval = setInterval(() => {
             // Stop if joystick released or out of ammo (for non-pistol weapons)
             if (!rightJoystickActive) {
@@ -913,6 +1019,7 @@ if (rightJoystickZone) {
                     clearInterval(mobileAutoFireInterval);
                     mobileAutoFireInterval = null;
                 }
+                stopMachineGunSound();
                 break;
             }
         }
@@ -933,6 +1040,7 @@ if (rightJoystickZone) {
             clearInterval(mobileAutoFireInterval);
             mobileAutoFireInterval = null;
         }
+        stopMachineGunSound();
     });
 }
 
@@ -971,7 +1079,12 @@ let myScore = 0;
 
 // Blood splatter particles
 let bloodSplatters = [];
-const MAX_BLOOD_SPLATTERS = 300; // Limit for performance
+const MAX_BLOOD_SPLATTERS = isMobile ? 100 : 300; // Lower limit on mobile for performance
+
+// Pre-rendered background canvas for performance
+let backgroundCanvas = null;
+let backgroundCtx = null;
+let backgroundRendered = false;
 
 // Muzzle flash effect
 const muzzleFlashes = {}; // playerId -> timestamp
@@ -1018,6 +1131,7 @@ socket.on('teamGameOver', (data) => {
     // Update score and phase from server
     myScore = data.teamScore;
     currentPhase = data.phase;
+    scoreToken = data.token; // Store token for score submission
 
     // Show game over screen for all players
     if (!isDead) {
@@ -1115,26 +1229,6 @@ playerSkinsShotgun.soldier1.src = 'kenney_top-down-shooter/PNG/Soldier 1/soldier
 playerSkinsShotgun.survivor1.src = 'kenney_top-down-shooter/PNG/Survivor 1/survivor1_silencer.png';
 playerSkinsShotgun.womanGreen.src = 'kenney_top-down-shooter/PNG/Woman Green/womanGreen_silencer.png';
 
-// Player skins with sniper (using machine sprite for longer weapon look)
-const playerSkinsSniper = {
-    hitman1: new Image(),
-    manBlue: new Image(),
-    manBrown: new Image(),
-    manOld: new Image(),
-    robot1: new Image(),
-    soldier1: new Image(),
-    survivor1: new Image(),
-    womanGreen: new Image()
-};
-playerSkinsSniper.hitman1.src = 'kenney_top-down-shooter/PNG/Hitman 1/hitman1_machine.png';
-playerSkinsSniper.manBlue.src = 'kenney_top-down-shooter/PNG/Man Blue/manBlue_machine.png';
-playerSkinsSniper.manBrown.src = 'kenney_top-down-shooter/PNG/Man Brown/manBrown_machine.png';
-playerSkinsSniper.manOld.src = 'kenney_top-down-shooter/PNG/Man Old/manOld_machine.png';
-playerSkinsSniper.robot1.src = 'kenney_top-down-shooter/PNG/Robot 1/robot1_machine.png';
-playerSkinsSniper.soldier1.src = 'kenney_top-down-shooter/PNG/Soldier 1/soldier1_machine.png';
-playerSkinsSniper.survivor1.src = 'kenney_top-down-shooter/PNG/Survivor 1/survivor1_machine.png';
-playerSkinsSniper.womanGreen.src = 'kenney_top-down-shooter/PNG/Woman Green/womanGreen_machine.png';
-
 // Item chest sprite
 const chestSprite = new Image();
 chestSprite.src = 'kenney_top-down-shooter/PNG/Tiles/tile_129.png';
@@ -1175,20 +1269,102 @@ decorationTiles.crate.src = 'kenney_top-down-shooter/PNG/Tiles/tile_129.png';
 const itemSprites = {
     machine_gun: new Image(),
     shotgun: new Image(),
-    sniper: new Image(),
     health: new Image()
 };
 itemSprites.machine_gun.src = 'kenney_top-down-shooter/PNG/weapon_machine.png';
 itemSprites.shotgun.src = 'kenney_top-down-shooter/PNG/weapon_silencer.png';
-itemSprites.sniper.src = 'kenney_top-down-shooter/PNG/weapon_gun.png';
 itemSprites.health.src = 'kenney_top-down-shooter/PNG/Tiles/tile_129.png'; // Crate for health
 
 let decorations = [];
+
+// Pre-render static background (grass, floors, walls, decorations) for performance
+function renderStaticBackground() {
+    const MAP_WIDTH = 2000;
+    const MAP_HEIGHT = 1200;
+    const TILE_SIZE = 64;
+
+    // Create offscreen canvas
+    backgroundCanvas = document.createElement('canvas');
+    backgroundCanvas.width = MAP_WIDTH;
+    backgroundCanvas.height = MAP_HEIGHT;
+    backgroundCtx = backgroundCanvas.getContext('2d');
+
+    // Draw grass tiles
+    if (grassImg.complete) {
+        for (let x = 0; x < MAP_WIDTH; x += TILE_SIZE) {
+            for (let y = 0; y < MAP_HEIGHT; y += TILE_SIZE) {
+                backgroundCtx.drawImage(grassImg, x, y, TILE_SIZE, TILE_SIZE);
+            }
+        }
+    } else {
+        backgroundCtx.fillStyle = '#4a9';
+        backgroundCtx.fillRect(0, 0, MAP_WIDTH, MAP_HEIGHT);
+    }
+
+    // Draw floors
+    for (const floor of floors) {
+        let floorImg;
+        if (floor.tile === 'wood') floorImg = woodFloorImg;
+        else if (floor.tile === 'bathroom') floorImg = bathroomFloorImg;
+
+        if (floorImg && floorImg.complete) {
+            for (let x = floor.x; x < floor.x + floor.w; x += TILE_SIZE) {
+                for (let y = floor.y; y < floor.y + floor.h; y += TILE_SIZE) {
+                    const drawW = Math.min(TILE_SIZE, floor.x + floor.w - x);
+                    const drawH = Math.min(TILE_SIZE, floor.y + floor.h - y);
+                    backgroundCtx.drawImage(floorImg, 0, 0, drawW, drawH, x, y, drawW, drawH);
+                }
+            }
+        } else {
+            backgroundCtx.fillStyle = floor.tile === 'bathroom' ? '#8BA9A5' : '#c89f65';
+            backgroundCtx.fillRect(floor.x, floor.y, floor.w, floor.h);
+        }
+    }
+
+    // Draw walls
+    for (const wall of walls) {
+        if (wallImg.complete) {
+            for (let x = wall.x; x < wall.x + wall.w; x += TILE_SIZE) {
+                for (let y = wall.y; y < wall.y + wall.h; y += TILE_SIZE) {
+                    const drawW = Math.min(TILE_SIZE, wall.x + wall.w - x);
+                    const drawH = Math.min(TILE_SIZE, wall.y + wall.h - y);
+                    backgroundCtx.drawImage(wallImg, x, y, drawW, drawH);
+                }
+            }
+        } else {
+            backgroundCtx.fillStyle = '#333';
+            backgroundCtx.fillRect(wall.x, wall.y, wall.w, wall.h);
+        }
+    }
+
+    // Draw decorations
+    for (const deco of decorations) {
+        const img = decorationTiles[deco.tile];
+        if (img && img.complete) {
+            backgroundCtx.drawImage(img, deco.x, deco.y, deco.w, deco.h);
+        }
+    }
+
+    backgroundRendered = true;
+}
+
+// Ensure images are loaded before rendering background
+function tryRenderBackground() {
+    if (backgroundRendered) return;
+    if (walls.length === 0 && floors.length === 0) return; // No map data yet
+
+    // Check if essential images are loaded
+    if (grassImg.complete && wallImg.complete && woodFloorImg.complete) {
+        renderStaticBackground();
+    }
+}
 
 socket.on('mapData', (data) => {
     walls = data.walls || [];
     floors = data.floors || [];
     decorations = data.decorations || [];
+    backgroundRendered = false; // Reset to re-render with new map data
+    tryRenderBackground();
 });
 
 socket.on('stateUpdate', (state) => {
@@ -1229,9 +1405,10 @@ socket.on('zombieDeath', (data) => {
 
 // Handle weapon pickup
 socket.on('weaponPickup', (data) => {
+    stopMachineGunSound(); // Stop if switching from machine gun
     currentWeapon = data.weapon;
     myAmmo = data.ammo || 0;
-    const weaponName = data.weapon === 'machine_gun' ? 'Machine Gun' : (data.weapon === 'sniper' ? 'Sniper' : 'Shotgun');
+    const weaponName = data.weapon === 'machine_gun' ? 'Machine Gun' : 'Shotgun';
 
     // Update weapon display
     updateWeaponDisplay();
@@ -1252,6 +1429,7 @@ socket.on('ammoUpdate', (data) => {
 
 // Handle weapon change (when out of ammo)
 socket.on('weaponChange', (data) => {
+    stopMachineGunSound(); // Stop if switching from machine gun
     currentWeapon = data.weapon;
     myAmmo = data.ammo || 0;
     updateWeaponDisplay();
@@ -1275,9 +1453,6 @@ function updateWeaponDisplay() {
     } else if (currentWeapon === 'shotgun') {
         displayText = `🔫 Shotgun (${myAmmo})`;
         className = 'shotgun';
-    } else if (currentWeapon === 'sniper') {
-        displayText = `🎯 Sniper (${myAmmo})`;
-        className = 'sniper';
     } else {
         displayText = '🔫 Pistol ∞';
         className = '';
@@ -1389,6 +1564,8 @@ pauseMainMenuBtn.addEventListener('click', (e) => {
     currentPhase = 1;
     currentWeapon = 'pistol';
     myAmmo = 0;
+    scoreToken = null;
+    scoreSubmitted = false;
     players = {};
     items = [];
     zombies = [];
@@ -1419,19 +1596,123 @@ const zombieSounds = {
     ]
 };
 
-// Gun sounds
-const gunSounds = {
-    pistol: new Audio('sounds/gun-shot-359196.mp3'),
-    shotgun: new Audio('sounds/doom-shotgun-2017-80549.mp3'),
-    machine_gun: new Audio('sounds/069321_light-machine-gun-m249-39814.mp3'),
-    sniper: new Audio('sounds/gun-shot-359196.mp3') // Use same as pistol but with different settings
-};
+// Synthesized gun sounds using Web Audio API
+function createNoiseBuffer() {
+    const bufferSize = audioCtx.sampleRate * 0.5;
+    const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+        data[i] = Math.random() * 2 - 1;
+    }
+    return buffer;
+}
 
-// Preload and configure gun sounds
-Object.values(gunSounds).forEach(sound => {
-    sound.volume = 0.4;
-    sound.preload = 'auto';
-});
+let noiseBuffer = null;
+function getNoiseBuffer() {
+    if (!noiseBuffer) noiseBuffer = createNoiseBuffer();
+    return noiseBuffer;
+}
+
+function playPistolSound() {
+    const now = audioCtx.currentTime;
+
+    // Noise burst for the "crack"
+    const noise = audioCtx.createBufferSource();
+    noise.buffer = getNoiseBuffer();
+    const noiseGain = audioCtx.createGain();
+    const noiseFilter = audioCtx.createBiquadFilter();
+    noiseFilter.type = 'bandpass';
+    noiseFilter.frequency.value = 1000;
+    noiseFilter.Q.value = 1;
+    noise.connect(noiseFilter);
+    noiseFilter.connect(noiseGain);
+    noiseGain.connect(audioCtx.destination);
+    noiseGain.gain.setValueAtTime(0.6, now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.01, now + 0.08);
+    noise.start(now);
+    noise.stop(now + 0.08);
+
+    // Low thump
+    const osc = audioCtx.createOscillator();
+    const oscGain = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(150, now);
+    osc.frequency.exponentialRampToValueAtTime(50, now + 0.1);
+    osc.connect(oscGain);
+    oscGain.connect(audioCtx.destination);
+    oscGain.gain.setValueAtTime(0.5, now);
+    oscGain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+    osc.start(now);
+    osc.stop(now + 0.1);
+}
+
+function playShotgunSound() {
+    const now = audioCtx.currentTime;
+
+    // Big noise burst
+    const noise = audioCtx.createBufferSource();
+    noise.buffer = getNoiseBuffer();
+    const noiseGain = audioCtx.createGain();
+    const noiseFilter = audioCtx.createBiquadFilter();
+    noiseFilter.type = 'lowpass';
+    noiseFilter.frequency.value = 800;
+    noise.connect(noiseFilter);
+    noiseFilter.connect(noiseGain);
+    noiseGain.connect(audioCtx.destination);
+    noiseGain.gain.setValueAtTime(0.8, now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+    noise.start(now);
+    noise.stop(now + 0.15);
+
+    // Deep bass thump
+    const osc = audioCtx.createOscillator();
+    const oscGain = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(80, now);
+    osc.frequency.exponentialRampToValueAtTime(30, now + 0.2);
+    osc.connect(oscGain);
+    oscGain.connect(audioCtx.destination);
+    oscGain.gain.setValueAtTime(0.7, now);
+    oscGain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+    osc.start(now);
+    osc.stop(now + 0.2);
+}
+
+function playMachineGunSound() {
+    const now = audioCtx.currentTime;
+
+    // Short sharp noise
+    const noise = audioCtx.createBufferSource();
+    noise.buffer = getNoiseBuffer();
+    const noiseGain = audioCtx.createGain();
+    const noiseFilter = audioCtx.createBiquadFilter();
+    noiseFilter.type = 'highpass';
+    noiseFilter.frequency.value = 500;
+    noise.connect(noiseFilter);
+    noiseFilter.connect(noiseGain);
+    noiseGain.connect(audioCtx.destination);
+    noiseGain.gain.setValueAtTime(0.4, now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.01, now + 0.05);
+    noise.start(now);
+    noise.stop(now + 0.05);
+
+    // Quick punch
+    const osc = audioCtx.createOscillator();
+    const oscGain = audioCtx.createGain();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(120, now);
+    osc.frequency.exponentialRampToValueAtTime(60, now + 0.04);
+    osc.connect(oscGain);
+    oscGain.connect(audioCtx.destination);
+    oscGain.gain.setValueAtTime(0.3, now);
+    oscGain.gain.exponentialRampToValueAtTime(0.01, now + 0.04);
+    osc.start(now);
+    osc.stop(now + 0.04);
+}
+
+// Stub functions for compatibility (machine gun no longer needs start/stop)
+function startMachineGunSound() {}
+function stopMachineGunSound() {}
 
 // Set volume for zombie sounds
 zombieSounds.hit.volume = 0.3;
@@ -1451,21 +1732,21 @@ function playZombieSound(type) {
 
     if (type === 'hit' && now - lastZombieHitSound > ZOMBIE_HIT_COOLDOWN) {
         lastZombieHitSound = now;
-        const sound = zombieSounds.hit.cloneNode();
-        sound.volume = 0.2 + Math.random() * 0.2;
-        sound.playbackRate = 0.9 + Math.random() * 0.2;
-        sound.play().catch(() => {});
+        zombieSounds.hit.volume = 0.2 + Math.random() * 0.2;
+        zombieSounds.hit.playbackRate = 0.9 + Math.random() * 0.2;
+        zombieSounds.hit.currentTime = 0;
+        zombieSounds.hit.play().catch(() => {});
     } else if (type === 'roar' && now - lastZombieRoarSound > ZOMBIE_ROAR_COOLDOWN) {
         lastZombieRoarSound = now;
-        const sound = zombieSounds.roar.cloneNode();
-        sound.volume = 0.2 + Math.random() * 0.15;
-        sound.play().catch(() => {});
+        zombieSounds.roar.volume = 0.2 + Math.random() * 0.15;
+        zombieSounds.roar.currentTime = 0;
+        zombieSounds.roar.play().catch(() => {});
     } else if (type === 'idle' && now - lastZombieIdleSound > ZOMBIE_IDLE_INTERVAL) {
         lastZombieIdleSound = now;
         const randomIdle = zombieSounds.idle[Math.floor(Math.random() * zombieSounds.idle.length)];
-        const sound = randomIdle.cloneNode();
-        sound.volume = 0.1 + Math.random() * 0.1;
-        sound.play().catch(() => {});
+        randomIdle.volume = 0.1 + Math.random() * 0.1;
+        randomIdle.currentTime = 0;
+        randomIdle.play().catch(() => {});
     }
 }
 
@@ -1475,43 +1756,15 @@ function playSound(type) {
     }
 
     if (type === 'shoot') {
-        // Play actual gun sound based on current weapon
-        const soundSource = gunSounds[currentWeapon] || gunSounds.pistol;
-        const sound = soundSource.cloneNode();
+        const weapon = currentWeapon || 'pistol';
 
-        // Set volume, playback rate, and start time based on weapon
-        let startTime = 0;
-        let duration = 250;
-
-        if (currentWeapon === 'sniper') {
-            sound.volume = 0.5;
-            sound.playbackRate = 0.8; // Lower pitch for sniper
-            startTime = 0.1;
-            duration = 1000;
-        } else if (currentWeapon === 'shotgun') {
-            sound.volume = 0.5;
-            sound.playbackRate = 1.0;
-            duration = 600;
-        } else if (currentWeapon === 'machine_gun') {
-            sound.volume = 0.3;
-            sound.playbackRate = 1.2;
-            duration = 150;
+        if (weapon === 'machine_gun') {
+            playMachineGunSound();
+        } else if (weapon === 'shotgun') {
+            playShotgunSound();
         } else {
-            // Pistol
-            sound.volume = 0.4;
-            sound.playbackRate = 1.0;
-            startTime = 0.1;
-            duration = 1000;
+            playPistolSound();
         }
-
-        sound.currentTime = startTime;
-        sound.play().catch(() => {});
-
-        // Stop after short duration to not play full audio
-        setTimeout(() => {
-            sound.pause();
-            sound.currentTime = 0;
-        }, duration);
         return;
     }
 
@@ -1584,20 +1837,16 @@ function update() {
             updateAutoAim();
         }
 
-        // Update auto-aim for mobile
+        // Update angle based on input
         if (isMobile && rightJoystickActive) {
+            // Aiming/shooting: use aim direction
             angle = isManualAiming ? manualAimAngle : autoAimAngle;
-        } else if (isMobile && !rightJoystickActive) {
-            // Use mouse/touch position if available, otherwise keep last angle
-            const centerX = canvas.width / 2;
-            const centerY = canvas.height / 2;
-            const dx = mouse.x - centerX;
-            const dy = mouse.y - centerY;
-            if (Math.sqrt(dx*dx + dy*dy) > 10) {
-                angle = Math.atan2(dy, dx);
-            } else if (useAutoAim) {
-                angle = autoAimAngle;
-            }
+        } else if (isMobile && leftJoystickActive && (joystickMovement.x !== 0 || joystickMovement.y !== 0)) {
+            // Moving on mobile: face movement direction
+            angle = Math.atan2(joystickMovement.y, joystickMovement.x);
+        } else if (isMobile) {
+            // Not moving or aiming: keep last angle
+            angle = myPlayer.angle || 0;
         } else {
             // Desktop: use mouse
             const centerX = canvas.width / 2;
@@ -1642,62 +1891,33 @@ function draw() {
     const myId = isOfflineSinglePlayer ? localPlayerId : socket.id;
     const myPlayer = players[myId];
 
-    // Camera Transform with zoom for sniper
+    // Camera Transform
     ctx.save();
     if (myPlayer) {
-        // Sniper zooms out to see more of the map
-        const zoomScale = currentWeapon === 'sniper' ? 0.6 : 1.0;
-
-        // Translate to center, scale, then translate to player position
-        ctx.translate(canvas.width / 2, canvas.height / 2);
-        ctx.scale(zoomScale, zoomScale);
-        ctx.translate(-myPlayer.x, -myPlayer.y);
+        const camX = -myPlayer.x + canvas.width / 2;
+        const camY = -myPlayer.y + canvas.height / 2;
+        ctx.translate(camX, camY);
     }
 
-    // Draw Grass Background (tiled)
-    const TILE_SIZE = 64; // Kenney tiles are typically 64x64
-    if (grassImg.complete) {
-        for (let x = 0; x < 2000; x += TILE_SIZE) {
-            for (let y = 0; y < 1200; y += TILE_SIZE) {
-                ctx.drawImage(grassImg, x, y, TILE_SIZE, TILE_SIZE);
-            }
-        }
+    // Try to render background if not done yet
+    tryRenderBackground();
+
+    // Draw pre-rendered static background (grass, floors, walls, decorations) in one call
+    if (backgroundRendered && backgroundCanvas) {
+        ctx.drawImage(backgroundCanvas, 0, 0);
     } else {
-        ctx.fillStyle = '#4a9'; // Fallback green
+        // Fallback: draw simple colored background if pre-render not ready
+        ctx.fillStyle = '#4a9';
         ctx.fillRect(0, 0, 2000, 1200);
     }
 
-    // Draw Floors (on top of grass)
-    for (const floor of floors) {
-        let floorImg;
-        if (floor.tile === 'wood') {
-            floorImg = woodFloorImg;
-        } else if (floor.tile === 'bathroom') {
-            floorImg = bathroomFloorImg;
-        }
-
-        if (floorImg && floorImg.complete) {
-            // Tile the floor image
-            for (let x = floor.x; x < floor.x + floor.w; x += TILE_SIZE) {
-                for (let y = floor.y; y < floor.y + floor.h; y += TILE_SIZE) {
-                    const drawW = Math.min(TILE_SIZE, floor.x + floor.w - x);
-                    const drawH = Math.min(TILE_SIZE, floor.y + floor.h - y);
-                    ctx.drawImage(floorImg, 0, 0, drawW, drawH, x, y, drawW, drawH);
-                }
-            }
-        } else {
-            // Fallback color
-            ctx.fillStyle = floor.tile === 'bathroom' ? '#8BA9A5' : '#c89f65';
-            ctx.fillRect(floor.x, floor.y, floor.w, floor.h);
-        }
-    }
-
-    // Draw Blood Splatters (fade out over 8 seconds)
+    // Draw Blood Splatters (fade out - faster on mobile for performance)
     const now = Date.now();
+    const bloodFadeTime = isMobile ? 4000 : 8000; // 4 seconds on mobile, 8 on desktop
     for (let i = bloodSplatters.length - 1; i >= 0; i--) {
         const blood = bloodSplatters[i];
         const age = now - blood.createdAt;
-        const fadeTime = 8000; // 8 seconds to fade
+        const fadeTime = bloodFadeTime;
 
         if (age > fadeTime) {
             bloodSplatters.splice(i, 1);
@@ -1731,31 +1951,6 @@ function draw() {
         ctx.beginPath();
         ctx.arc(dust.x, dust.y, dust.size, 0, Math.PI * 2);
         ctx.fill();
-    }
-
-    // Draw Walls
-    for (const wall of walls) {
-        if (wallImg.complete) {
-            // Tile wall image along wall segments
-            for (let x = wall.x; x < wall.x + wall.w; x += TILE_SIZE) {
-                for (let y = wall.y; y < wall.y + wall.h; y += TILE_SIZE) {
-                    const drawW = Math.min(TILE_SIZE, wall.x + wall.w - x);
-                    const drawH = Math.min(TILE_SIZE, wall.y + wall.h - y);
-                    ctx.drawImage(wallImg, x, y, drawW, drawH);
-                }
-            }
-        } else {
-            ctx.fillStyle = '#333';
-            ctx.fillRect(wall.x, wall.y, wall.w, wall.h);
-        }
-    }
-
-    // Draw Decorations
-    for (const deco of decorations) {
-        const img = decorationTiles[deco.tile];
-        if (img && img.complete) {
-            ctx.drawImage(img, deco.x, deco.y, deco.w, deco.h);
-        }
     }
 
     // Draw Items
@@ -1953,8 +2148,6 @@ function draw() {
             spriteToUse = playerSkinsMachine[p.skin];
         } else if (p.weapon === 'shotgun' && playerSkinsShotgun[p.skin]) {
             spriteToUse = playerSkinsShotgun[p.skin];
-        } else if (p.weapon === 'sniper' && playerSkinsSniper[p.skin]) {
-            spriteToUse = playerSkinsSniper[p.skin];
         } else {
             spriteToUse = playerSkins[p.skin] || playerSkins.hitman1;
         }
@@ -2146,11 +2339,12 @@ function draw() {
             const isMobile = 'ontouchstart' in window;
             ctx.fillText(isMobile ? 'Tap anywhere to respawn' : 'Press R to respawn', canvas.width / 2, canvas.height / 2 + 50);
             restartBtn.style.display = isMobile ? 'none' : 'block';
-        } else {
-            // In single player, show game over screen (only once)
+        } else if (isOfflineSinglePlayer) {
+            // Verified single player - submit for verification
             if (!isDead) {
+                console.log('[Client] Player died in single player, calling verifyAndShowGameOver');
                 isDead = true;
-                showGameOverScreen();
+                verifyAndShowGameOver();
             }
         }
     } else {
@@ -2158,12 +2352,85 @@ function draw() {
     }
 }
 
+// Verify single player game and show game over
+async function verifyAndShowGameOver() {
+    console.log('[Client] verifyAndShowGameOver called');
+    console.log('[Client] sessionId:', singlePlayerSessionId);
+    console.log('[Client] inputLog size:', localGameState?.inputLog?.length);
+
+    // Get final score directly from game state (myScore may not be updated yet)
+    const player = localGameState?.players?.[localPlayerId];
+    const finalScore = player ? player.score : myScore;
+    const finalPhase = localGameState?.currentPhase || currentPhase;
+
+    // Update myScore to match for consistency
+    myScore = finalScore;
+    currentPhase = finalPhase;
+
+    finalScoreDisplay.textContent = `Score: ${finalScore}`;
+    finalPhaseDisplay.textContent = `Phase Reached: ${finalPhase}`;
+
+    // Show game over screen immediately with "verifying" state
+    submitScoreSection.style.display = 'none';
+    scoreSubmittedText.style.display = 'none';
+    scoreSubmittedText.textContent = 'Verifying score...';
+    scoreSubmittedText.style.display = 'block';
+    scoreSubmitted = false;
+    gameOverScreen.style.display = 'flex';
+
+    // Submit for verification if we have a session
+    if (singlePlayerSessionId && localGameState && localGameState.inputLog) {
+        console.log('[Client] Submitting for verification - score:', finalScore, 'phase:', finalPhase);
+        try {
+            const response = await fetch('/api/singleplayer/submit', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sessionId: singlePlayerSessionId,
+                    inputLog: localGameState.inputLog,
+                    finalScore: finalScore,
+                    finalPhase: finalPhase,
+                    name: myName
+                })
+            });
+
+            const data = await response.json();
+
+            console.log('[Client] Verification response:', data);
+            if (response.ok && data.verified) {
+                // Score verified! Store token and show submit option
+                console.log('[Client] Verification SUCCESS, showing submit button');
+                scoreToken = data.token;
+                scoreSubmittedText.style.display = 'none';
+                submitScoreSection.style.display = 'block';
+            } else {
+                // Verification failed
+                console.log('[Client] Verification FAILED:', data.error);
+                scoreSubmittedText.textContent = 'Score verification failed';
+                console.error('Verification failed:', data.error);
+            }
+        } catch (err) {
+            console.error('Verification error:', err);
+            scoreSubmittedText.textContent = 'Verification error';
+        }
+    } else {
+        scoreSubmittedText.textContent = 'No session - score not verified';
+    }
+
+    // Clear session ID
+    singlePlayerSessionId = null;
+}
+
 function showGameOverScreen() {
     finalScoreDisplay.textContent = `Score: ${myScore}`;
     finalPhaseDisplay.textContent = `Phase Reached: ${currentPhase}`;
 
-    // Reset submission UI
-    submitScoreSection.style.display = 'block';
+    // Reset submission UI - allow submission if we have a valid token
+    if (scoreToken) {
+        submitScoreSection.style.display = 'block';
+    } else {
+        submitScoreSection.style.display = 'none';
+    }
     scoreSubmittedText.style.display = 'none';
     scoreSubmitted = false;
 
@@ -2182,16 +2449,20 @@ submitScoreBtn.addEventListener('click', async (e) => {
             body: JSON.stringify({
                 name: myName,
                 score: myScore,
-                phase: currentPhase
+                phase: currentPhase,
+                token: scoreToken
             })
         });
 
         if (response.ok) {
             scoreSubmitted = true;
             submitScoreSection.style.display = 'none';
+            scoreSubmittedText.textContent = 'Score submitted!';
             scoreSubmittedText.style.display = 'block';
+            scoreToken = null; // Clear used token
         } else {
-            alert('Failed to submit score. Please try again.');
+            const data = await response.json();
+            alert(data.error || 'Failed to submit score.');
         }
     } catch (err) {
         console.error('Error submitting score:', err);
@@ -2200,7 +2471,7 @@ submitScoreBtn.addEventListener('click', async (e) => {
 });
 
 // Play Again handler
-playAgainBtn.addEventListener('click', (e) => {
+playAgainBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
     console.log('Play Again clicked');
     gameOverScreen.style.display = 'none';
@@ -2210,6 +2481,9 @@ playAgainBtn.addEventListener('click', (e) => {
     currentPhase = 1;
     currentWeapon = 'pistol'; // Reset weapon
     myAmmo = 0;
+    scoreToken = null;
+    scoreSubmitted = false;
+    singlePlayerSessionId = null;
 
     // Update UI immediately (visual feedback)
     scoreDisplay.textContent = 'Score: 0';
@@ -2217,8 +2491,27 @@ playAgainBtn.addEventListener('click', (e) => {
     updateWeaponDisplay();
 
     if (isOfflineSinglePlayer) {
-        // Offline mode: reset local game state
-        localGameState = GameLogic.createGameState(localPlayerId, myName);
+        // Verified single player: get new session from server
+        try {
+            const response = await fetch('/api/singleplayer/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ playerName: myName })
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                singlePlayerSessionId = data.sessionId;
+                localGameState = GameLogic.createGameState(localPlayerId, myName, data.seed);
+            } else {
+                // Fallback to random seed if server unavailable
+                localGameState = GameLogic.createGameState(localPlayerId, myName);
+            }
+        } catch (err) {
+            console.error('Failed to get new session:', err);
+            localGameState = GameLogic.createGameState(localPlayerId, myName);
+        }
+
         players = localGameState.players;
         projectiles = localGameState.projectiles;
         zombies = localGameState.zombies;
@@ -2259,6 +2552,9 @@ mainMenuBtn.addEventListener('click', (e) => {
     currentPhase = 1;
     currentWeapon = 'pistol';
     myAmmo = 0;
+    scoreToken = null;
+    scoreSubmitted = false;
+    singlePlayerSessionId = null;
     players = {};
     items = [];
     zombies = [];
@@ -2267,6 +2563,7 @@ mainMenuBtn.addEventListener('click', (e) => {
     dustParticles = [];
     isSinglePlayer = false;
     isOfflineSinglePlayer = false;
+    isTrainingMode = false;
     isPaused = false;
 
     // Reset HUD
@@ -2289,6 +2586,21 @@ mainMenuBtn.addEventListener('touchend', (e) => {
 submitScoreBtn.addEventListener('touchend', (e) => {
     e.preventDefault();
     submitScoreBtn.click();
+});
+
+// Share on X button
+shareOnXBtn.addEventListener('click', () => {
+    const score = myScore || 0;
+    const phase = currentPhase || 1;
+    const text = `I just scored ${score} points and reached phase ${phase} in Zombie Survival! Can you beat my score? 🧟🔫`;
+    const url = 'https://zombiegame.net';
+    const twitterUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`;
+    window.open(twitterUrl, '_blank', 'width=550,height=420');
+});
+
+shareOnXBtn.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    shareOnXBtn.click();
 });
 
 // Add touch support for pause buttons
@@ -2317,11 +2629,19 @@ function handleShoot() {
         // Offline mode: create projectile locally
         const player = localGameState.players[localPlayerId];
         if (player && player.hp > 0) {
+            // Record shoot event for replay verification
+            if (localGameState.inputLog) {
+                localGameState.inputLog.push({
+                    f: localGameState.frame,
+                    s: 1 // shoot event
+                });
+            }
             const result = GameLogic.createProjectile(player, localGameState);
             for (const proj of result.projectiles) {
                 localGameState.projectiles.push(proj);
             }
             if (result.weaponChanged) {
+                stopMachineGunSound(); // Stop if switching from machine gun
                 currentWeapon = result.newWeapon;
                 myAmmo = 0;
                 updateWeaponDisplay();
@@ -2392,10 +2712,10 @@ function startLocalGameLoop() {
             chatMessages.appendChild(msgDiv);
             chatMessages.scrollTop = chatMessages.scrollHeight;
 
-            // Check if local player died
-            if (localGameState.players[localPlayerId].hp <= 0) {
+            // Check if local player died - use verified game over for single player
+            if (localGameState.players[localPlayerId].hp <= 0 && !isDead) {
                 isDead = true;
-                showGameOver();
+                verifyAndShowGameOver();
             }
         },
         onZombieRoar: () => {
@@ -2432,9 +2752,10 @@ function startLocalGameLoop() {
         },
         onWeaponPickup: (playerId, data) => {
             if (playerId === localPlayerId) {
+                stopMachineGunSound(); // Stop if switching from machine gun
                 currentWeapon = data.weapon;
                 myAmmo = data.ammo || 0;
-                const weaponName = data.weapon === 'machine_gun' ? 'Machine Gun' : (data.weapon === 'sniper' ? 'Sniper' : 'Shotgun');
+                const weaponName = data.weapon === 'machine_gun' ? 'Machine Gun' : 'Shotgun';
                 updateWeaponDisplay();
                 const msgDiv = document.createElement('div');
                 msgDiv.className = 'chatMessage system';
@@ -2445,11 +2766,52 @@ function startLocalGameLoop() {
         }
     };
 
+    // Track last input state for delta encoding
+    let lastRecordedInput = null;
+    let lastRecordedAngle = null;
+
     // Run game logic at 60fps
     localGameLoopInterval = setInterval(() => {
         if (!localGameState || localGameState.isPaused) return;
 
         const now = Date.now();
+        const player = localGameState.players[localPlayerId];
+
+        // Record input if changed (delta encoding to save space)
+        if (player && localGameState.inputLog) {
+            const currentInput = player.input;
+            const currentAngle = player.angle;
+
+            // Check if input changed
+            const inputChanged = !lastRecordedInput ||
+                currentInput.up !== lastRecordedInput.up ||
+                currentInput.down !== lastRecordedInput.down ||
+                currentInput.left !== lastRecordedInput.left ||
+                currentInput.right !== lastRecordedInput.right;
+
+            // Check if angle changed significantly (more than 0.01 radians)
+            const angleChanged = lastRecordedAngle === null ||
+                Math.abs(currentAngle - lastRecordedAngle) > 0.01;
+
+            if (inputChanged || angleChanged) {
+                localGameState.inputLog.push({
+                    f: localGameState.frame, // frame number
+                    i: inputChanged ? {
+                        u: currentInput.up ? 1 : 0,
+                        d: currentInput.down ? 1 : 0,
+                        l: currentInput.left ? 1 : 0,
+                        r: currentInput.right ? 1 : 0
+                    } : undefined,
+                    a: angleChanged ? Math.round(currentAngle * 1000) / 1000 : undefined // 3 decimal precision
+                });
+                lastRecordedInput = { ...currentInput };
+                lastRecordedAngle = currentAngle;
+            }
+        }
+
+        // Increment frame counter
+        localGameState.frame++;
+
         GameLogic.updateGameState(localGameState, now, localEvents);
 
         // Sync local state to render variables
@@ -2459,7 +2821,6 @@ function startLocalGameLoop() {
         items = localGameState.items;
 
         // Update score display
-        const player = localGameState.players[localPlayerId];
         if (player) {
             myScore = player.score || 0;
             if (scoreDisplay) scoreDisplay.textContent = `Score: ${myScore}`;

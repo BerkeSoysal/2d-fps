@@ -2,6 +2,57 @@ const express = require('express');
 const app = express();
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+
+// Secret key for signing score tokens (use env var in production)
+const SCORE_SECRET = process.env.SCORE_SECRET || crypto.randomBytes(32).toString('hex');
+
+// Store valid score tokens (token -> { score, phase, expires })
+const validScoreTokens = new Map();
+
+// Clean up expired tokens every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [token, data] of validScoreTokens) {
+    if (now > data.expires) {
+      validScoreTokens.delete(token);
+    }
+  }
+}, 5 * 60 * 1000);
+
+// Generate a signed score token
+function generateScoreToken(score, phase) {
+  const timestamp = Date.now();
+  const data = `${score}:${phase}:${timestamp}`;
+  const signature = crypto.createHmac('sha256', SCORE_SECRET).update(data).digest('hex').substring(0, 16);
+  const token = `${data}:${signature}`;
+
+  // Store token as valid for 5 minutes
+  validScoreTokens.set(token, {
+    score: Number(score),
+    phase: Number(phase),
+    expires: timestamp + 5 * 60 * 1000
+  });
+
+  return token;
+}
+
+// Verify a score token
+function verifyScoreToken(token, claimedScore, claimedPhase) {
+  const tokenData = validScoreTokens.get(token);
+  if (!tokenData) return false;
+  if (Date.now() > tokenData.expires) {
+    validScoreTokens.delete(token);
+    return false;
+  }
+  // Verify score and phase match
+  if (tokenData.score !== Number(claimedScore) || tokenData.phase !== Number(claimedPhase)) {
+    return false;
+  }
+  // Token is single-use - delete after verification
+  validScoreTokens.delete(token);
+  return true;
+}
 const http = require('http');
 const server = http.createServer(app);
 const { Server } = require("socket.io");
@@ -60,10 +111,21 @@ app.get('/api/highscores', (req, res) => {
 });
 
 app.post('/api/highscores', (req, res) => {
-  const { name, score, phase } = req.body;
+  const { name, score, phase, token } = req.body;
+  console.log('[HS] Submit - name:', name, 'score:', score, 'phase:', phase, 'token:', token ? 'present' : 'MISSING');
 
   if (!name || score === undefined) {
     return res.status(400).json({ error: 'Name and score are required' });
+  }
+
+  if (!token) {
+    console.log('[HS] No token provided!');
+    return res.status(400).json({ error: 'Invalid submission' });
+  }
+
+  // Verify the token matches the claimed score
+  if (!verifyScoreToken(token, score, phase)) {
+    return res.status(403).json({ error: 'Nice try ;)' });
   }
 
   const scores = loadHighScores();
@@ -80,6 +142,190 @@ app.post('/api/highscores', (req, res) => {
     res.status(500).json({ error: 'Failed to save score' });
   }
 });
+
+// ==========================================
+// VERIFIED SINGLE PLAYER API
+// ==========================================
+const GameLogic = require('./public/gameLogic.js');
+
+// Store active single player sessions
+const singlePlayerSessions = new Map();
+
+// Clean up expired sessions every 10 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [sessionId, session] of singlePlayerSessions) {
+    // Sessions expire after 1 hour
+    if (now - session.startTime > 60 * 60 * 1000) {
+      singlePlayerSessions.delete(sessionId);
+    }
+  }
+}, 10 * 60 * 1000);
+
+// Start a verified single player session
+app.post('/api/singleplayer/start', (req, res) => {
+  const { playerName } = req.body;
+  console.log('[SP] Starting session for:', playerName);
+
+  if (!playerName) {
+    return res.status(400).json({ error: 'Player name required' });
+  }
+
+  // Generate session ID and seed
+  const sessionId = crypto.randomBytes(16).toString('hex');
+  const seed = crypto.randomInt(0, 2147483647);
+
+  // Store session
+  singlePlayerSessions.set(sessionId, {
+    playerName: String(playerName).substring(0, 15),
+    seed: seed,
+    startTime: Date.now()
+  });
+
+  console.log('[SP] Session created:', sessionId, 'seed:', seed);
+  res.json({
+    sessionId: sessionId,
+    seed: seed
+  });
+});
+
+// Submit verified single player game
+app.post('/api/singleplayer/submit', (req, res) => {
+  const { sessionId, inputLog, finalScore, finalPhase, name } = req.body;
+  console.log('[SP] Submit request - session:', sessionId, 'claimed score:', finalScore, 'phase:', finalPhase);
+  console.log('[SP] Input log size:', inputLog ? inputLog.length : 0);
+
+  // Validate session exists
+  const session = singlePlayerSessions.get(sessionId);
+  if (!session) {
+    console.log('[SP] Session not found!');
+  } else {
+    console.log('[SP] Session found - seed:', session.seed);
+  }
+  if (!session) {
+    return res.status(400).json({ error: 'Invalid or expired session' });
+  }
+
+  // Remove session (single use)
+  singlePlayerSessions.delete(sessionId);
+
+  // Verify by replay
+  try {
+    console.log('[SP] Starting replay verification...');
+    const verifiedScore = replayAndVerify(session.seed, session.playerName, inputLog);
+    console.log('[SP] Replay result - score:', verifiedScore.score, 'phase:', verifiedScore.phase);
+
+    if (verifiedScore.score !== finalScore || verifiedScore.phase !== finalPhase) {
+      console.log(`[SP] Score mismatch: claimed ${finalScore}/${finalPhase}, verified ${verifiedScore.score}/${verifiedScore.phase}`);
+      return res.status(403).json({ error: 'Score verification failed' });
+    }
+
+    // Generate token for highscore submission
+    const token = generateScoreToken(verifiedScore.score, verifiedScore.phase);
+    console.log('[SP] Verification successful, token generated');
+
+    res.json({
+      success: true,
+      verified: true,
+      score: verifiedScore.score,
+      phase: verifiedScore.phase,
+      token: token
+    });
+
+  } catch (err) {
+    console.error('[SP] Replay verification error:', err);
+    return res.status(500).json({ error: 'Verification failed' });
+  }
+});
+
+// Replay game with inputs and verify score
+function replayAndVerify(seed, playerName, inputLog) {
+  const playerId = 'replay_player';
+
+  // Create game state with the same seed
+  const gameState = GameLogic.createGameState(playerId, playerName, seed);
+
+  // Sort input log by frame
+  const sortedInputs = [...inputLog].sort((a, b) => a.f - b.f);
+  let inputIndex = 0;
+
+  // Current input state
+  let currentInput = { up: false, down: false, left: false, right: false };
+  let currentAngle = 0;
+
+  // Simulate game
+  const maxFrames = 60 * 60 * 30; // Max 30 minutes at 60fps
+  const startTime = Date.now();
+
+  for (let frame = 0; frame < maxFrames; frame++) {
+    gameState.frame = frame;
+
+    // Get player reference for this frame
+    const player = gameState.players[playerId];
+
+    // Apply inputs for this frame
+    while (inputIndex < sortedInputs.length && sortedInputs[inputIndex].f === frame) {
+      const input = sortedInputs[inputIndex];
+
+      if (input.i) {
+        currentInput = {
+          up: input.i.u === 1,
+          down: input.i.d === 1,
+          left: input.i.l === 1,
+          right: input.i.r === 1
+        };
+        // Apply input immediately so shooting uses correct state
+        if (player) player.input = currentInput;
+      }
+      if (input.a !== undefined) {
+        currentAngle = input.a;
+        // Apply angle immediately so shooting uses correct angle
+        if (player) player.angle = currentAngle;
+      }
+      if (input.s === 1) {
+        // Shoot event
+        if (player && player.hp > 0) {
+          const result = GameLogic.createProjectile(player, gameState);
+          for (const proj of result.projectiles) {
+            gameState.projectiles.push(proj);
+          }
+          if (result.weaponChanged) {
+            player.weapon = result.newWeapon;
+            player.ammo = 0;
+          }
+        }
+      }
+
+      inputIndex++;
+    }
+
+    // Ensure input state is applied (for frames with no new input)
+    if (player) {
+      player.input = currentInput;
+      player.angle = currentAngle;
+    }
+
+    // Run one frame of game logic
+    const now = startTime + (frame * 1000 / 60); // Simulate time
+    GameLogic.updateGameState(gameState, now, {});
+
+    // Check if player died (game over)
+    if (player && player.hp <= 0) {
+      break;
+    }
+
+    // Check if all inputs processed and no more game activity
+    if (inputIndex >= sortedInputs.length && frame > sortedInputs[sortedInputs.length - 1]?.f + 60) {
+      break;
+    }
+  }
+
+  const player = gameState.players[playerId];
+  return {
+    score: player ? player.score : 0,
+    phase: gameState.currentPhase
+  };
+}
 
 const players = {}; // Keep global lookup for simple socket->room mapping if needed, or remove.
 // We will primarily use room.players now.
@@ -119,12 +365,11 @@ const ZOMBIE_LUNGE_COOLDOWN = 2000; // Cooldown between lunges
 const WEAPONS = {
   pistol: { damage: 10, speed: 18, range: 1000, spread: 0 },
   machine_gun: { damage: 12, speed: 20, range: 800, spread: 0.1, maxAmmo: 50 },
-  shotgun: { damage: 25, speed: 15, range: 300, spread: 0.4, pellets: 5, maxAmmo: 12 },
-  sniper: { damage: 1000, speed: 30, range: 2000, spread: 0, maxAmmo: 3, fireRate: 1000 }
+  shotgun: { damage: 25, speed: 15, range: 300, spread: 0.4, pellets: 5, maxAmmo: 12 }
 };
 
 // Item spawn settings
-const ITEM_TYPES = ['health', 'machine_gun', 'shotgun', 'sniper'];
+const ITEM_TYPES = ['health', 'machine_gun', 'shotgun'];
 const ITEM_SPAWN_INTERVAL = 15000; // 15 seconds
 const MAX_ITEMS = 5;
 let itemIdCounter = 0;
@@ -458,15 +703,6 @@ io.on('connection', (socket) => {
 
     const weapon = WEAPONS[player.weapon] || WEAPONS.pistol;
 
-    // Fire rate limit for sniper
-    if (weapon.fireRate) {
-      const now = Date.now();
-      if (player.lastShotTime && now - player.lastShotTime < weapon.fireRate) {
-        return; // Can't shoot yet
-      }
-      player.lastShotTime = now;
-    }
-
     // Check ammo for special weapons
     if (player.weapon !== 'pistol') {
       if (player.ammo <= 0) {
@@ -483,10 +719,14 @@ io.on('connection', (socket) => {
     // Broadcast shot event for muzzle flash (to other players)
     socket.to(room.id).emit('playerShot', { playerId: socket.id });
 
-    // Shotgun fires multiple pellets
+    // Shotgun fires multiple pellets in an even spread
     if (player.weapon === 'shotgun') {
-      for (let i = 0; i < weapon.pellets; i++) {
-        const spreadAngle = player.angle + (Math.random() - 0.5) * weapon.spread * 2;
+      const pelletCount = weapon.pellets;
+      const totalSpread = weapon.spread * 2;
+      for (let i = 0; i < pelletCount; i++) {
+        // Evenly distribute pellets across the spread arc
+        const spreadOffset = (i / (pelletCount - 1)) * totalSpread - weapon.spread;
+        const spreadAngle = player.angle + spreadOffset + (Math.random() - 0.5) * 0.05;
         room.projectiles.push({
           x: player.x, y: player.y,
           vx: Math.cos(spreadAngle) * weapon.speed,
@@ -985,9 +1225,12 @@ function updateRoom(room, now) {
     // All players dead - trigger team game over (only once)
     if (!room.teamGameOver) {
       room.teamGameOver = true;
+      // Generate signed token for score submission
+      const scoreToken = generateScoreToken(room.teamScore, room.currentPhase);
       io.to(room.id).emit('teamGameOver', {
         teamScore: room.teamScore,
-        phase: room.currentPhase
+        phase: room.currentPhase,
+        token: scoreToken
       });
     }
     // Don't spawn or process - wait for restart
@@ -1126,10 +1369,6 @@ function updateRoom(room, now) {
             player.weapon = 'shotgun';
             player.ammo = WEAPONS.shotgun.maxAmmo;
             io.to(player.playerId).emit('weaponPickup', { weapon: 'shotgun', ammo: player.ammo });
-          } else if (item.type === 'sniper') {
-            player.weapon = 'sniper';
-            player.ammo = WEAPONS.sniper.maxAmmo;
-            io.to(player.playerId).emit('weaponPickup', { weapon: 'sniper', ammo: player.ammo });
           }
           room.items.splice(i, 1);
           break;

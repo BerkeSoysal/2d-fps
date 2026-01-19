@@ -1,50 +1,26 @@
 [
   {
-    "name": "sfffff",
-    "score": 1710,
-    "phase": 1,
-    "date": "2026-01-11T21:01:30.706Z"
+    "name": "ozansiken",
+    "score": 3131,
+    "phase": 10,
+    "date": "2026-01-18T00:00:00.000Z"
   },
   {
-    "name": "asda",
-    "score": 1418,
-    "phase": 2,
-    "date": "2026-01-12T00:05:57.291Z"
+    "name": "Player",
+    "score": 50,
+    "phase": 1,
+    "date": "2026-01-18T20:50:33.119Z"
   },
   {
-    "name": "asdas",
-    "score": 10,
+    "name": "Player",
+    "score": 50,
     "phase": 1,
-    "date": "2026-01-11T14:32:13.798Z"
+    "date": "2026-01-18T20:53:51.698Z"
   },
   {
-    "name": "FinalCheck",
-    "score": 0,
+    "name": "Player",
+    "score": 50,
     "phase": 1,
-    "date": "2026-01-11T14:19:09.813Z"
-  },
-  {
-    "name": "CrashTest",
-    "score": 0,
-    "phase": 1,
-    "date": "2026-01-11T14:25:08.310Z"
-  },
-  {
-    "name": "sdas",
-    "score": 0,
-    "phase": 1,
-    "date": "2026-01-12T00:09:02.237Z"
-  },
-  {
-    "name": "sdfsd",
-    "score": 0,
-    "phase": 1,
-    "date": "2026-01-12T00:13:59.596Z"
-  },
-  {
-    "name": "sdfsd",
-    "score": 0,
-    "phase": 1,
-    "date": "2026-01-12T00:14:01.786Z"
+    "date": "2026-01-19T00:06:46.374Z"
   }
 ]
