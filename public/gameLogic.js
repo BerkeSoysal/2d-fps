@@ -1,7 +1,7 @@
 // Shared Game Logic - runs on both server (multiplayer) and client (single player)
 // This module is environment-agnostic and uses callbacks for events
 
-(function(exports) {
+(function (exports) {
   'use strict';
 
   // ==========================================
@@ -11,7 +11,7 @@
     let state = seed >>> 0; // Ensure unsigned 32-bit
     return {
       // Returns float between 0 and 1 (like Math.random())
-      next: function() {
+      next: function () {
         state |= 0;
         state = state + 0x6D2B79F5 | 0;
         let t = Math.imul(state ^ state >>> 15, 1 | state);
@@ -19,11 +19,11 @@
         return ((t ^ t >>> 14) >>> 0) / 4294967296;
       },
       // Returns integer between min (inclusive) and max (exclusive)
-      nextInt: function(min, max) {
+      nextInt: function (min, max) {
         return Math.floor(this.next() * (max - min)) + min;
       },
       // Returns current state (for debugging/serialization)
-      getState: function() {
+      getState: function () {
         return state;
       }
     };
@@ -56,9 +56,14 @@
     ZOMBIE_LUNGE_COOLDOWN: 2000,
     ZOMBIE_BASE_SPEED: 2.2,
     // Grenade constants
-    GRENADE_SPEED: 12,
+    // Speed is calculated to match indicated distance with friction (0.95)
+    // Actual distance ≈ speed / (1 - friction) = speed / 0.05 = speed * 20
+    GRENADE_SPEED: 18, // Base speed: travels ~360 units
+    GRENADE_SPEED_MAX: 36, // Max speed: travels ~720 units when fully charged
+    GRENADE_CHARGE_TIME: 1200, // Time in ms to reach full charge (balanced for aiming)
     GRENADE_FRICTION: 0.95,
-    GRENADE_MAX_DISTANCE: 350,
+    GRENADE_MAX_DISTANCE: 360,
+    GRENADE_MAX_DISTANCE_CHARGED: 720, // Max distance when fully charged
     GRENADE_FUSE_TIME: 2000,
     GRENADE_BLAST_RADIUS: 150,
     GRENADE_DAMAGE: 80,
@@ -116,11 +121,18 @@
   ];
 
   // Collision walls (rectangles for physics)
+  // Walls are split to leave gaps for glass tiles
   const buildingWalls = [
-    // Main house top wall (thinner for window visibility)
-    { x: 580, y: 380, w: 540, h: 32 },
-    // Main house left wall (thinner for window visibility)
-    { x: 580, y: 380, w: 32, h: 384 },
+    // Main house top wall - segment 1: NW corner to first glass (580 to 708)
+    { x: 580, y: 380, w: 128, h: 32 },
+    // Main house top wall - segment 2: between glass pairs (836 to 900)
+    { x: 836, y: 380, w: 64, h: 32 },
+    // Main house top wall - segment 3: after last glass to bathroom divider (1028 to 1092)
+    { x: 1028, y: 380, w: 64, h: 32 },
+    // Main house left wall - segment 1: top corner to first glass (380 to 508)
+    { x: 580, y: 380, w: 32, h: 128 },
+    // Main house left wall - segment 2: after second glass to divider (636 to 764)
+    { x: 580, y: 636, w: 32, h: 128 },
     // Divider wall left section (with doorway gap from 836-888)
     { x: 580, y: 764, w: 256, h: 64 },
     // Divider wall right section
@@ -222,10 +234,21 @@
     return 400 + (phase - 1) * 20;
   }
 
-  function checkWallCollision(x, y, radius) {
+  function checkWallCollision(x, y, radius, destroyedGlass) {
+    // Check solid walls
     for (const wall of buildingWalls) {
       const closestX = Math.max(wall.x, Math.min(x, wall.x + wall.w));
       const closestY = Math.max(wall.y, Math.min(y, wall.y + wall.h));
+      const dx = x - closestX;
+      const dy = y - closestY;
+      if ((dx * dx + dy * dy) < (radius * radius)) return true;
+    }
+    // Check glass tiles (solid unless destroyed)
+    for (const glass of glassTiles) {
+      // Skip if this glass is destroyed
+      if (destroyedGlass && destroyedGlass.indexOf(glass.id) !== -1) continue;
+      const closestX = Math.max(glass.x, Math.min(x, glass.x + glass.w));
+      const closestY = Math.max(glass.y, Math.min(y, glass.y + glass.h));
       const dx = x - closestX;
       const dy = y - closestY;
       if ((dx * dx + dy * dy) < (radius * radius)) return true;
@@ -255,7 +278,7 @@
     return false;
   }
 
-  function canSeePlayer(zombie, player, currentPhase) {
+  function canSeePlayer(zombie, player, currentPhase, destroyedGlass) {
     const dx = player.x - zombie.x;
     const dy = player.y - zombie.y;
     const dist = Math.sqrt(dx * dx + dy * dy);
@@ -267,7 +290,7 @@
       const t = i / steps;
       const x = zombie.x + dx * t;
       const y = zombie.y + dy * t;
-      if (checkWallCollision(x, y, 2)) return false;
+      if (checkWallCollision(x, y, 2, destroyedGlass)) return false;
     }
     return true;
   }
@@ -399,21 +422,27 @@
   // ==========================================
   // GRENADE THROWING
   // ==========================================
-  function createGrenade(player, gameState) {
+  function createGrenade(player, gameState, chargePower) {
     if (player.grenades <= 0) return null;
 
     player.grenades--;
 
     const C = CONSTANTS;
+    // chargePower is 0.0 to 1.0, default to minimum throw
+    const power = Math.max(0, Math.min(1, chargePower || 0));
+    const speed = C.GRENADE_SPEED + (C.GRENADE_SPEED_MAX - C.GRENADE_SPEED) * power;
+    const maxDist = C.GRENADE_MAX_DISTANCE + (C.GRENADE_MAX_DISTANCE_CHARGED - C.GRENADE_MAX_DISTANCE) * power;
+
     return {
       id: 'g_' + (++grenadeIdCounter),
       x: player.x,
       y: player.y,
-      vx: Math.cos(player.angle) * C.GRENADE_SPEED,
-      vy: Math.sin(player.angle) * C.GRENADE_SPEED,
+      vx: Math.cos(player.angle) * speed,
+      vy: Math.sin(player.angle) * speed,
       ownerId: player.playerId,
       spawnTime: Date.now(),
-      distanceTraveled: 0
+      distanceTraveled: 0,
+      maxDistance: maxDist
     };
   }
 
@@ -456,7 +485,7 @@
       newX = Math.max(0, Math.min(C.CANVAS_WIDTH, newX));
       newY = Math.max(0, Math.min(C.CANVAS_HEIGHT, newY));
 
-      if (!checkWallCollision(newX, player.y, 20) && !checkDecorationCollision(newX, player.y, 15)) {
+      if (!checkWallCollision(newX, player.y, 20, gameState.destroyedGlass) && !checkDecorationCollision(newX, player.y, 15)) {
         player.x = newX;
       } else {
         // Wall slide: blocked on X, slide vertically opposite to aim direction
@@ -469,7 +498,7 @@
         }
       }
 
-      if (!checkWallCollision(player.x, newY, 20) && !checkDecorationCollision(player.x, newY, 15)) {
+      if (!checkWallCollision(player.x, newY, 20, gameState.destroyedGlass) && !checkDecorationCollision(player.x, newY, 15)) {
         player.y = newY;
       } else {
         // Wall slide: blocked on Y, slide horizontally opposite to aim direction
@@ -598,7 +627,7 @@
               const knockY = (p.vy / pSpeed) * knockbackStrength;
               const newX = zombie.x + knockX;
               const newY = zombie.y + knockY;
-              if (!checkWallCollision(newX, newY, 15) && !checkDecorationCollision(newX, newY, 15)) {
+              if (!checkWallCollision(newX, newY, 15, gameState.destroyedGlass) && !checkDecorationCollision(newX, newY, 15)) {
                 zombie.x = Math.max(0, Math.min(C.CANVAS_WIDTH, newX));
                 zombie.y = Math.max(0, Math.min(C.CANVAS_HEIGHT, newY));
               }
@@ -635,7 +664,7 @@
 
       // Check wall/decoration collision - stop moving
       let hitObstacle = false;
-      if (checkWallCollision(newX, newY, 8) || checkDecorationCollision(newX, newY, 8)) {
+      if (checkWallCollision(newX, newY, 8, gameState.destroyedGlass) || checkDecorationCollision(newX, newY, 8)) {
         hitObstacle = true;
         g.vx = 0;
         g.vy = 0;
@@ -644,8 +673,9 @@
         g.y = newY;
       }
 
-      // Stop if max distance reached
-      if (g.distanceTraveled >= C.GRENADE_MAX_DISTANCE) {
+      // Stop if max distance reached (use per-grenade distance if set, else constant)
+      const maxDist = g.maxDistance || C.GRENADE_MAX_DISTANCE;
+      if (g.distanceTraveled >= maxDist) {
         g.vx = 0;
         g.vy = 0;
       }
@@ -740,7 +770,7 @@
       const hadTarget = !!zombie.targetId;
 
       if (zombie.targetId && gameState.players[zombie.targetId] && gameState.players[zombie.targetId].hp > 0) {
-        if (canSeePlayer(zombie, gameState.players[zombie.targetId], gameState.currentPhase)) {
+        if (canSeePlayer(zombie, gameState.players[zombie.targetId], gameState.currentPhase, gameState.destroyedGlass)) {
           target = gameState.players[zombie.targetId];
         } else {
           zombie.targetId = null;
@@ -751,7 +781,7 @@
         let minDist = Infinity;
         for (const p of activePlayers) {
           const dist = Math.sqrt((p.x - zombie.x) ** 2 + (p.y - zombie.y) ** 2);
-          if (dist < minDist && canSeePlayer(zombie, p, gameState.currentPhase)) {
+          if (dist < minDist && canSeePlayer(zombie, p, gameState.currentPhase, gameState.destroyedGlass)) {
             minDist = dist;
             target = p;
             zombie.targetId = p.playerId;
@@ -817,13 +847,13 @@
                 // For X movement: check if zombie's X path crosses the glass X range
                 // and zombie's Y is near the glass Y range (with margin for approach)
                 const inGlassXRange = (zombie.x >= glass.x - 20 && zombie.x <= glass.x + glass.w + 20) ||
-                                      (newX >= glass.x - 20 && newX <= glass.x + glass.w + 20);
+                  (newX >= glass.x - 20 && newX <= glass.x + glass.w + 20);
                 const nearGlassY = zombie.y >= glass.y - 40 && zombie.y <= glass.y + glass.h + 40;
 
                 // For Y movement: check if zombie's Y path crosses the glass Y range
                 // and zombie's X is near the glass X range (with margin for approach)
                 const inGlassYRange = (zombie.y >= glass.y - 20 && zombie.y <= glass.y + glass.h + 20) ||
-                                      (newY >= glass.y - 20 && newY <= glass.y + glass.h + 20);
+                  (newY >= glass.y - 20 && newY <= glass.y + glass.h + 20);
                 const nearGlassX = zombie.x >= glass.x - 40 && zombie.x <= glass.x + glass.w + 40;
 
                 if (inGlassXRange && nearGlassY) canPassThroughX = true;
@@ -832,8 +862,8 @@
             }
           }
 
-          if (canPassThroughX || !checkWallCollision(newX, zombie.y, 15)) zombie.x = newX;
-          if (canPassThroughY || !checkWallCollision(zombie.x, newY, 15)) zombie.y = newY;
+          if (canPassThroughX || !checkWallCollision(newX, zombie.y, 15, gameState.destroyedGlass)) zombie.x = newX;
+          if (canPassThroughY || !checkWallCollision(zombie.x, newY, 15, gameState.destroyedGlass)) zombie.y = newY;
           zombie.angle = Math.atan2(dy, dx);
         }
         zombie.wandering = false;
@@ -899,8 +929,8 @@
           const newX = zombie.x + (dx / dist) * speed;
           const newY = zombie.y + (dy / dist) * speed;
 
-          if (!checkWallCollision(newX, zombie.y, 15)) zombie.x = newX;
-          if (!checkWallCollision(zombie.x, newY, 15)) zombie.y = newY;
+          if (!checkWallCollision(newX, zombie.y, 15, gameState.destroyedGlass)) zombie.x = newX;
+          if (!checkWallCollision(zombie.x, newY, 15, gameState.destroyedGlass)) zombie.y = newY;
           zombie.angle = Math.atan2(dy, dx);
         } else {
           zombie.alertedPosition = null;
@@ -920,12 +950,12 @@
         const wanderX = zombie.x + Math.cos(zombie.wanderAngle) * 1;
         const wanderY = zombie.y + Math.sin(zombie.wanderAngle) * 1;
 
-        if (!checkWallCollision(wanderX, zombie.y, 15)) {
+        if (!checkWallCollision(wanderX, zombie.y, 15, gameState.destroyedGlass)) {
           zombie.x = wanderX;
         } else {
           zombie.wanderAngle = Math.PI - zombie.wanderAngle;
         }
-        if (!checkWallCollision(zombie.x, wanderY, 15)) {
+        if (!checkWallCollision(zombie.x, wanderY, 15, gameState.destroyedGlass)) {
           zombie.y = wanderY;
         } else {
           zombie.wanderAngle = -zombie.wanderAngle;

@@ -593,6 +593,10 @@ const mouse = {
     y: 0
 };
 
+// Grenade charge state
+let grenadeChargeStart = null;
+let isChargingGrenade = false;
+
 // Input Handling
 window.addEventListener('keydown', (e) => {
     if (!gameJoined || isChatting) return;
@@ -610,16 +614,12 @@ window.addEventListener('keydown', (e) => {
         }
     }
 
-    // E key for throwing grenade
-    if (key === 'e') {
+    // E key for charging grenade (start charging on press)
+    if (key === 'e' && !isChargingGrenade) {
         const myPlayer = isOfflineSinglePlayer ? localGameState?.players?.[localPlayerId] : players[socket.id];
         if (myPlayer && myPlayer.hp > 0 && myGrenades > 0) {
-            if (isOfflineSinglePlayer) {
-                // Handle offline grenade throwing
-                throwLocalGrenade();
-            } else {
-                socket.emit('throwGrenade');
-            }
+            isChargingGrenade = true;
+            grenadeChargeStart = Date.now();
         }
     }
 });
@@ -630,33 +630,53 @@ window.addEventListener('keyup', (e) => {
     if (key === 'a') keys.a = false;
     if (key === 's') keys.s = false;
     if (key === 'd') keys.d = false;
+
+    // E key release - throw grenade with charged power
+    if (key === 'e' && isChargingGrenade) {
+        const myPlayer = isOfflineSinglePlayer ? localGameState?.players?.[localPlayerId] : players[socket.id];
+        if (myPlayer && myPlayer.hp > 0 && myGrenades > 0) {
+            const chargeTime = Date.now() - grenadeChargeStart;
+            const maxChargeTime = GameLogic?.CONSTANTS?.GRENADE_CHARGE_TIME || 1500;
+            const chargePower = Math.min(1, chargeTime / maxChargeTime);
+
+            if (isOfflineSinglePlayer) {
+                throwLocalGrenade(chargePower);
+            } else {
+                socket.emit('throwGrenade', { chargePower });
+            }
+        }
+        isChargingGrenade = false;
+        grenadeChargeStart = null;
+    }
 });
 
 // Throw grenade in offline single player mode
-function throwLocalGrenade() {
+function throwLocalGrenade(chargePower = 0) {
     if (!localGameState || !localGameState.players[localPlayerId]) return;
 
     const player = localGameState.players[localPlayerId];
     if (player.grenades <= 0) return;
 
-    // Log the grenade throw for replay verification
+    // Log the grenade throw for replay verification (include charge power)
     if (localGameState.inputLog) {
         localGameState.inputLog.push({
             f: localGameState.frame,
-            g: 1 // grenade throw event
+            g: 1, // grenade throw event
+            p: chargePower // charge power
         });
     }
 
-    const grenade = GameLogic.createGrenade(player, localGameState);
+    const grenade = GameLogic.createGrenade(player, localGameState, chargePower);
     if (grenade) {
         localGameState.grenades.push(grenade);
         grenades = localGameState.grenades;
         myGrenades = player.grenades;
         updateWeaponDisplay();
 
+        const powerPercent = Math.round(chargePower * 100);
         const msgDiv = document.createElement('div');
         msgDiv.className = 'chatMessage system';
-        msgDiv.innerHTML = `💣 Grenade thrown! (${myGrenades} remaining)`;
+        msgDiv.innerHTML = `💣 Grenade thrown! (${powerPercent}% power, ${myGrenades} remaining)`;
         chatMessages.appendChild(msgDiv);
         chatMessages.scrollTop = chatMessages.scrollHeight;
     }
@@ -1913,8 +1933,8 @@ function playMachineGunSound() {
 }
 
 // Stub functions for compatibility (machine gun no longer needs start/stop)
-function startMachineGunSound() {}
-function stopMachineGunSound() {}
+function startMachineGunSound() { }
+function stopMachineGunSound() { }
 
 // Set volume for zombie sounds
 zombieSounds.hit.volume = 0.3;
@@ -1937,18 +1957,18 @@ function playZombieSound(type) {
         zombieSounds.hit.volume = 0.2 + Math.random() * 0.2;
         zombieSounds.hit.playbackRate = 0.9 + Math.random() * 0.2;
         zombieSounds.hit.currentTime = 0;
-        zombieSounds.hit.play().catch(() => {});
+        zombieSounds.hit.play().catch(() => { });
     } else if (type === 'roar' && now - lastZombieRoarSound > ZOMBIE_ROAR_COOLDOWN) {
         lastZombieRoarSound = now;
         zombieSounds.roar.volume = 0.2 + Math.random() * 0.15;
         zombieSounds.roar.currentTime = 0;
-        zombieSounds.roar.play().catch(() => {});
+        zombieSounds.roar.play().catch(() => { });
     } else if (type === 'idle' && now - lastZombieIdleSound > ZOMBIE_IDLE_INTERVAL) {
         lastZombieIdleSound = now;
         const randomIdle = zombieSounds.idle[Math.floor(Math.random() * zombieSounds.idle.length)];
         randomIdle.volume = 0.1 + Math.random() * 0.1;
         randomIdle.currentTime = 0;
-        randomIdle.play().catch(() => {});
+        randomIdle.play().catch(() => { });
     }
 }
 
@@ -2259,7 +2279,7 @@ function draw() {
         ctx.textAlign = 'center';
         const label = item.type === 'machine_gun' ? 'MACHINE GUN' :
             item.type === 'shotgun' ? 'SHOTGUN' :
-            item.type === 'grenade' ? 'GRENADE' : 'HEALTH +25';
+                item.type === 'grenade' ? 'GRENADE' : 'HEALTH +25';
 
         // Text background
         const textWidth = ctx.measureText(label).width;
@@ -2394,6 +2414,62 @@ function draw() {
 
             ctx.restore();
         }
+    }
+
+    // Draw Grenade Throw Power Indicator (while charging)
+    if (isChargingGrenade && grenadeChargeStart && myPlayer && myPlayer.hp > 0) {
+        const chargeTime = Date.now() - grenadeChargeStart;
+        const maxChargeTime = GameLogic?.CONSTANTS?.GRENADE_CHARGE_TIME || 1500;
+        const chargePower = Math.min(1, chargeTime / maxChargeTime);
+
+        // Calculate throw parameters
+        const baseSpeed = GameLogic?.CONSTANTS?.GRENADE_SPEED || 12;
+        const maxSpeed = GameLogic?.CONSTANTS?.GRENADE_SPEED_MAX || 24;
+        const baseDist = GameLogic?.CONSTANTS?.GRENADE_MAX_DISTANCE || 350;
+        const maxDist = GameLogic?.CONSTANTS?.GRENADE_MAX_DISTANCE_CHARGED || 700;
+
+        const speed = baseSpeed + (maxSpeed - baseSpeed) * chargePower;
+        const distance = baseDist + (maxDist - baseDist) * chargePower;
+
+        // Draw trajectory line
+        const startX = myPlayer.x;
+        const startY = myPlayer.y;
+        const endX = startX + Math.cos(myPlayer.angle) * distance;
+        const endY = startY + Math.sin(myPlayer.angle) * distance;
+
+        // Gradient line from player to target
+        const gradient = ctx.createLinearGradient(startX, startY, endX, endY);
+        const hue = 60 - chargePower * 60; // Yellow to Red as power increases
+        gradient.addColorStop(0, `hsla(${hue}, 100%, 50%, 0.8)`);
+        gradient.addColorStop(0.5, `hsla(${hue}, 100%, 50%, 0.5)`);
+        gradient.addColorStop(1, `hsla(${hue}, 100%, 50%, 0.2)`);
+
+        ctx.strokeStyle = gradient;
+        ctx.lineWidth = 3 + chargePower * 3; // Line gets thicker with power
+        ctx.setLineDash([10, 10]);
+        ctx.lineDashOffset = -Date.now() / 50; // Animated dash
+
+        ctx.beginPath();
+        ctx.moveTo(startX, startY);
+        ctx.lineTo(endX, endY);
+        ctx.stroke();
+
+        ctx.setLineDash([]); // Reset dash
+
+        // Draw target circle at end
+        ctx.beginPath();
+        ctx.arc(endX, endY, 15 + chargePower * 10, 0, Math.PI * 2);
+        ctx.strokeStyle = `hsla(${hue}, 100%, 50%, 0.6)`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // Draw power percentage near player
+        ctx.save();
+        ctx.font = 'bold 16px Arial';
+        ctx.fillStyle = `hsl(${hue}, 100%, 50%)`;
+        ctx.textAlign = 'center';
+        ctx.fillText(`${Math.round(chargePower * 100)}%`, myPlayer.x, myPlayer.y - 40);
+        ctx.restore();
     }
 
     // Draw Players
@@ -2568,7 +2644,7 @@ function draw() {
 
             // Check if zombie is off-screen
             const isOffScreen = zombieScreenX < -20 || zombieScreenX > canvas.width + 20 ||
-                                zombieScreenY < -20 || zombieScreenY > canvas.height + 20;
+                zombieScreenY < -20 || zombieScreenY > canvas.height + 20;
 
             if (isOffScreen) {
                 // Calculate angle from center to zombie
@@ -3105,7 +3181,7 @@ function startLocalGameLoop() {
                 });
             }
         },
-        onGlassBreak: function(glass) {
+        onGlassBreak: function (glass) {
             playSound('glassBreak');
         }
     };

@@ -407,6 +407,7 @@ function createRoom(hostId, hostName, roomName, isSinglePlayer = false, isPvp = 
     zombies: [],
     items: [],
     grenades: [],
+    destroyedGlass: [], // Track which glass tiles have been broken
 
     // Team score for multiplayer
     teamScore: 0,
@@ -503,50 +504,29 @@ const buildingWalls = [
   { x: 900, y: 1000, w: 200, h: 20 }
 ];
 
-function checkWallCollision(x, y, radius) {
-  for (const wall of buildingWalls) {
-    const closestX = Math.max(wall.x, Math.min(x, wall.x + wall.w));
-    const closestY = Math.max(wall.y, Math.min(y, wall.y + wall.h));
-    const dx = x - closestX;
-    const dy = y - closestY;
-    if ((dx * dx + dy * dy) < (radius * radius)) return true;
-  }
-  return false;
+// Use shared GameLogic collision functions
+function checkWallCollision(x, y, radius, destroyedGlass) {
+  return GameLogic.checkWallCollision(x, y, radius, destroyedGlass);
 }
 
 function checkDecorationCollision(x, y, radius = 15) {
-  for (const deco of decorations) {
-    if (!deco.collidable) continue;
-    const closestX = Math.max(deco.x, Math.min(x, deco.x + deco.w));
-    const closestY = Math.max(deco.y, Math.min(y, deco.y + deco.h));
-    const dx = x - closestX;
-    const dy = y - closestY;
-    if ((dx * dx + dy * dy) < (radius * radius)) return true;
-  }
-  return false;
+  return GameLogic.checkDecorationCollision(x, y, radius);
 }
 
-function canSeePlayer(zombie, player, currentPhase) { // Pass phase to use per-room context
-  const dx = player.x - zombie.x;
-  const dy = player.y - zombie.y;
-  const dist = Math.sqrt(dx * dx + dy * dy);
-
-  if (dist > getZombieSightRadius(currentPhase)) return false;
-
-  const steps = Math.floor(dist / 20);
-  for (let i = 1; i < steps; i++) {
-    const t = i / steps;
-    const x = zombie.x + dx * t;
-    const y = zombie.y + dy * t;
-    if (checkWallCollision(x, y, 2)) return false;
-  }
-  return true;
+function canSeePlayer(zombie, player, currentPhase, destroyedGlass) {
+  return GameLogic.canSeePlayer(zombie, player, currentPhase, destroyedGlass);
 }
 
 
 io.on('connection', (socket) => {
   console.log('a user connected: ' + socket.id);
-  socket.emit('mapData', { floors, walls: buildingWalls, decorations, wallTiles: GameLogic.wallTiles });
+  socket.emit('mapData', {
+    floors: GameLogic.floors,
+    walls: GameLogic.buildingWalls,
+    decorations: GameLogic.decorations,
+    wallTiles: GameLogic.wallTiles,
+    glassTiles: GameLogic.glassTiles
+  });
 
   socket.on('getRooms', (options) => {
     const pvp = options?.pvp || false;
@@ -768,8 +748,8 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Throw grenade (E key)
-  socket.on('throwGrenade', () => {
+  // Throw grenade (E key) - with charge power support
+  socket.on('throwGrenade', (data) => {
     const room = getPlayerRoom(socket.id);
     if (!room || !room.inProgress) return;
     const player = room.players[socket.id];
@@ -779,16 +759,22 @@ io.on('connection', (socket) => {
     player.grenades--;
     io.to(socket.id).emit('grenadeUpdate', { grenades: player.grenades });
 
+    // Calculate speed based on charge power (0.0 to 1.0)
+    const chargePower = Math.max(0, Math.min(1, data?.chargePower || 0));
+    const speed = GRENADE_SPEED + (GRENADE_SPEED * chargePower); // Up to 2x base speed
+    const maxDist = GRENADE_MAX_DISTANCE + (GRENADE_MAX_DISTANCE * chargePower); // Up to 2x distance
+
     // Create grenade entity
     const grenade = {
       id: 'g_' + (++grenadeIdCounter),
       x: player.x,
       y: player.y,
-      vx: Math.cos(player.angle) * GRENADE_SPEED,
-      vy: Math.sin(player.angle) * GRENADE_SPEED,
+      vx: Math.cos(player.angle) * speed,
+      vy: Math.sin(player.angle) * speed,
       ownerId: socket.id,
       thrownAt: Date.now(),
       distanceTraveled: 0,
+      maxDistance: maxDist,
       stopped: false
     };
     room.grenades.push(grenade);
@@ -921,13 +907,13 @@ function updateRoom(room, now) {
     newY = Math.max(0, Math.min(CANVAS_HEIGHT, newY));
 
     // Wall collision with velocity bounce-back
-    if (!checkWallCollision(newX, player.y, 20) && !checkDecorationCollision(newX, player.y, 15)) {
+    if (!checkWallCollision(newX, player.y, 20, room.destroyedGlass) && !checkDecorationCollision(newX, player.y, 15)) {
       player.x = newX;
     } else {
       player.vx = 0; // Stop horizontal movement on collision
     }
 
-    if (!checkWallCollision(player.x, newY, 20) && !checkDecorationCollision(player.x, newY, 15)) {
+    if (!checkWallCollision(player.x, newY, 20, room.destroyedGlass) && !checkDecorationCollision(player.x, newY, 15)) {
       player.y = newY;
     } else {
       player.vy = 0; // Stop vertical movement on collision
@@ -951,8 +937,26 @@ function updateRoom(room, now) {
     if (p.x < -100 || p.x > CANVAS_WIDTH + 100 || p.y < -100 || p.y > CANVAS_HEIGHT + 100) {
       room.projectiles.splice(i, 1); continue;
     }
+    // Check glass collision first (glass can be destroyed by bullets)
+    let hitGlass = null;
+    for (const glass of GameLogic.glassTiles) {
+      if (room.destroyedGlass.indexOf(glass.id) !== -1) continue; // Already destroyed
+      if (p.x >= glass.x && p.x <= glass.x + glass.w && p.y >= glass.y && p.y <= glass.y + glass.h) {
+        hitGlass = glass;
+        break;
+      }
+    }
+    if (hitGlass) {
+      // Destroy the glass
+      room.destroyedGlass.push(hitGlass.id);
+      io.to(room.id).emit('glassBreak', { id: hitGlass.id, x: hitGlass.x, y: hitGlass.y });
+      room.projectiles.splice(i, 1);
+      continue;
+    }
+
+    // Wall Collision (use shared buildingWalls from GameLogic)
     let hitWall = false;
-    for (const wall of buildingWalls) {
+    for (const wall of GameLogic.buildingWalls) {
       if (p.x >= wall.x && p.x <= wall.x + wall.w && p.y >= wall.y && p.y <= wall.y + wall.h) {
         hitWall = true; break;
       }
@@ -1030,7 +1034,7 @@ function updateRoom(room, now) {
             const newX = zombie.x + knockX;
             const newY = zombie.y + knockY;
             // Only apply if not hitting a wall
-            if (!checkWallCollision(newX, newY, 15) && !checkDecorationCollision(newX, newY, 15)) {
+            if (!checkWallCollision(newX, newY, 15, room.destroyedGlass) && !checkDecorationCollision(newX, newY, 15)) {
               zombie.x = Math.max(0, Math.min(CANVAS_WIDTH, newX));
               zombie.y = Math.max(0, Math.min(CANVAS_HEIGHT, newY));
             }
@@ -1066,14 +1070,15 @@ function updateRoom(room, now) {
       g.vy *= GRENADE_FRICTION;
 
       // Check wall/decoration collision
-      if (checkWallCollision(g.x, g.y, 8) || checkDecorationCollision(g.x, g.y, 8)) {
+      if (checkWallCollision(g.x, g.y, 8, room.destroyedGlass) || checkDecorationCollision(g.x, g.y, 8)) {
         g.stopped = true;
         g.vx = 0;
         g.vy = 0;
       }
 
-      // Check max distance or stopped rolling
-      if (g.distanceTraveled >= GRENADE_MAX_DISTANCE || speed < 0.5) {
+      // Check max distance or stopped rolling (use per-grenade distance if set)
+      const maxDist = g.maxDistance || GRENADE_MAX_DISTANCE;
+      if (g.distanceTraveled >= maxDist || speed < 0.5) {
         g.stopped = true;
         g.vx = 0;
         g.vy = 0;
@@ -1147,7 +1152,7 @@ function updateRoom(room, now) {
 
     // Check current target
     if (zombie.targetId && room.players[zombie.targetId] && room.players[zombie.targetId].hp > 0) {
-      if (canSeePlayer(zombie, room.players[zombie.targetId], room.currentPhase)) {
+      if (canSeePlayer(zombie, room.players[zombie.targetId], room.currentPhase, room.destroyedGlass)) {
         target = room.players[zombie.targetId];
       } else {
         zombie.targetId = null; // Lost sight of target
@@ -1160,7 +1165,7 @@ function updateRoom(room, now) {
       let minDist = Infinity;
       for (const p of activePlayers) {
         const dist = Math.sqrt((p.x - zombie.x) ** 2 + (p.y - zombie.y) ** 2);
-        if (dist < minDist && canSeePlayer(zombie, p, room.currentPhase)) {
+        if (dist < minDist && canSeePlayer(zombie, p, room.currentPhase, room.destroyedGlass)) {
           minDist = dist;
           target = p;
           zombie.targetId = p.playerId;
@@ -1222,10 +1227,10 @@ function updateRoom(room, now) {
         const newY = zombie.y + moveY * speed;
 
         // Check wall collision before moving
-        if (!checkWallCollision(newX, zombie.y, 15)) {
+        if (!checkWallCollision(newX, zombie.y, 15, room.destroyedGlass)) {
           zombie.x = newX;
         }
-        if (!checkWallCollision(zombie.x, newY, 15)) {
+        if (!checkWallCollision(zombie.x, newY, 15, room.destroyedGlass)) {
           zombie.y = newY;
         }
         zombie.angle = Math.atan2(dy, dx);
@@ -1301,10 +1306,10 @@ function updateRoom(room, now) {
         const newX = zombie.x + (dx / dist) * speed;
         const newY = zombie.y + (dy / dist) * speed;
 
-        if (!checkWallCollision(newX, zombie.y, 15)) {
+        if (!checkWallCollision(newX, zombie.y, 15, room.destroyedGlass)) {
           zombie.x = newX;
         }
-        if (!checkWallCollision(zombie.x, newY, 15)) {
+        if (!checkWallCollision(zombie.x, newY, 15, room.destroyedGlass)) {
           zombie.y = newY;
         }
         zombie.angle = Math.atan2(dy, dx);
@@ -1330,12 +1335,12 @@ function updateRoom(room, now) {
       const wanderY = zombie.y + Math.sin(zombie.wanderAngle) * 1;
 
       // Check wall collision for wandering
-      if (!checkWallCollision(wanderX, zombie.y, 15)) {
+      if (!checkWallCollision(wanderX, zombie.y, 15, room.destroyedGlass)) {
         zombie.x = wanderX;
       } else {
         zombie.wanderAngle = Math.PI - zombie.wanderAngle; // Bounce off wall
       }
-      if (!checkWallCollision(zombie.x, wanderY, 15)) {
+      if (!checkWallCollision(zombie.x, wanderY, 15, room.destroyedGlass)) {
         zombie.y = wanderY;
       } else {
         zombie.wanderAngle = -zombie.wanderAngle; // Bounce off wall
