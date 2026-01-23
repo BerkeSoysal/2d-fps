@@ -90,12 +90,12 @@
 
   // Glass windows that can be destroyed by bullets
   const glassTiles = [
-    { id: 'glass_top_1', x: 708, y: 380, w: 64, h: 32 },
-    { id: 'glass_top_2', x: 772, y: 380, w: 64, h: 32 },
-    { id: 'glass_top_3', x: 900, y: 380, w: 64, h: 32 },
-    { id: 'glass_top_4', x: 964, y: 380, w: 64, h: 32 },
-    { id: 'glass_left_1', x: 580, y: 508, w: 32, h: 64 },
-    { id: 'glass_left_2', x: 580, y: 572, w: 32, h: 64 }
+    { id: 'glass_top_1', x: 708, y: 380, w: 64, h: 64 },
+    { id: 'glass_top_2', x: 772, y: 380, w: 64, h: 64 },
+    { id: 'glass_top_3', x: 900, y: 380, w: 64, h: 64 },
+    { id: 'glass_top_4', x: 964, y: 380, w: 64, h: 64 },
+    { id: 'glass_left_1', x: 580, y: 508, w: 64, h: 64 },
+    { id: 'glass_left_2', x: 580, y: 572, w: 64, h: 64 }
   ];
 
   const decorations = [
@@ -333,6 +333,7 @@
       zombies: [],
       grenades: [],
       items: [],
+      destroyedGlass: [],
       currentPhase: 1,
       zombiesSpawnedThisPhase: 0,
       zombiesKilledThisPhase: 0,
@@ -500,16 +501,37 @@
         continue;
       }
 
-      let hitWall = false;
-      for (const wall of buildingWalls) {
-        if (p.x >= wall.x && p.x <= wall.x + wall.w && p.y >= wall.y && p.y <= wall.y + wall.h) {
-          hitWall = true;
+      // Check glass collision first
+      let hitGlass = null;
+      let glassIsDestroyed = false;
+      for (const glass of glassTiles) {
+        if (p.x >= glass.x && p.x <= glass.x + glass.w && p.y >= glass.y && p.y <= glass.y + glass.h) {
+          hitGlass = glass;
+          glassIsDestroyed = gameState.destroyedGlass.indexOf(glass.id) !== -1;
           break;
         }
       }
-      if (hitWall) {
+      if (hitGlass && !glassIsDestroyed) {
+        // Glass not destroyed - destroy it and stop bullet
+        gameState.destroyedGlass.push(hitGlass.id);
+        if (events.onGlassBreak) events.onGlassBreak(hitGlass);
         gameState.projectiles.splice(i, 1);
         continue;
+      }
+
+      // Skip wall collision if bullet is passing through destroyed glass
+      if (!glassIsDestroyed) {
+        let hitWall = false;
+        for (const wall of buildingWalls) {
+          if (p.x >= wall.x && p.x <= wall.x + wall.w && p.y >= wall.y && p.y <= wall.y + wall.h) {
+            hitWall = true;
+            break;
+          }
+        }
+        if (hitWall) {
+          gameState.projectiles.splice(i, 1);
+          continue;
+        }
       }
 
       const damage = p.damage || 10;
@@ -784,8 +806,34 @@
           const newX = zombie.x + moveX * speed;
           const newY = zombie.y + moveY * speed;
 
-          if (!checkWallCollision(newX, zombie.y, 15)) zombie.x = newX;
-          if (!checkWallCollision(zombie.x, newY, 15)) zombie.y = newY;
+          // Check if zombie is lunging through destroyed glass
+          const isLunging = zombie.lungeStartTime && now - zombie.lungeStartTime < C.ZOMBIE_LUNGE_DURATION;
+          let canPassThroughX = false;
+          let canPassThroughY = false;
+
+          if (isLunging && gameState.destroyedGlass.length > 0) {
+            for (const glass of glassTiles) {
+              if (gameState.destroyedGlass.indexOf(glass.id) !== -1) {
+                // For X movement: check if zombie's X path crosses the glass X range
+                // and zombie's Y is near the glass Y range (with margin for approach)
+                const inGlassXRange = (zombie.x >= glass.x - 20 && zombie.x <= glass.x + glass.w + 20) ||
+                                      (newX >= glass.x - 20 && newX <= glass.x + glass.w + 20);
+                const nearGlassY = zombie.y >= glass.y - 40 && zombie.y <= glass.y + glass.h + 40;
+
+                // For Y movement: check if zombie's Y path crosses the glass Y range
+                // and zombie's X is near the glass X range (with margin for approach)
+                const inGlassYRange = (zombie.y >= glass.y - 20 && zombie.y <= glass.y + glass.h + 20) ||
+                                      (newY >= glass.y - 20 && newY <= glass.y + glass.h + 20);
+                const nearGlassX = zombie.x >= glass.x - 40 && zombie.x <= glass.x + glass.w + 40;
+
+                if (inGlassXRange && nearGlassY) canPassThroughX = true;
+                if (inGlassYRange && nearGlassX) canPassThroughY = true;
+              }
+            }
+          }
+
+          if (canPassThroughX || !checkWallCollision(newX, zombie.y, 15)) zombie.x = newX;
+          if (canPassThroughY || !checkWallCollision(zombie.x, newY, 15)) zombie.y = newY;
           zombie.angle = Math.atan2(dy, dx);
         }
         zombie.wandering = false;
