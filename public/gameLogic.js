@@ -54,7 +54,15 @@
     ZOMBIE_LUNGE_DURATION: 250,
     ZOMBIE_LUNGE_REST: 600,
     ZOMBIE_LUNGE_COOLDOWN: 2000,
-    ZOMBIE_BASE_SPEED: 2.2
+    ZOMBIE_BASE_SPEED: 2.2,
+    // Grenade constants
+    GRENADE_SPEED: 12,
+    GRENADE_FRICTION: 0.95,
+    GRENADE_MAX_DISTANCE: 350,
+    GRENADE_FUSE_TIME: 2000,
+    GRENADE_BLAST_RADIUS: 150,
+    GRENADE_DAMAGE: 80,
+    GRENADE_MIN_DAMAGE: 20
   };
 
   const WEAPONS = {
@@ -63,7 +71,7 @@
     shotgun: { damage: 25, speed: 15, range: 300, spread: 0.4, pellets: 5, maxAmmo: 12 }
   };
 
-  const ITEM_TYPES = ['health', 'machine_gun', 'shotgun'];
+  const ITEM_TYPES = ['health', 'machine_gun', 'shotgun', 'grenade'];
 
   const SKINS = [
     'hitman1', 'manBlue', 'manBrown', 'manOld', 'robot1', 'soldier1', 'survivor1', 'womanGreen'
@@ -73,44 +81,130 @@
   // MAP DATA
   // ==========================================
   const floors = [
-    { x: 600, y: 400, w: 500, h: 400, tile: 'wood' },
-    { x: 600, y: 800, w: 300, h: 200, tile: 'wood' },
+    // Extended to show through windows
+    { x: 580, y: 380, w: 560, h: 450, tile: 'wood' },
+    { x: 580, y: 800, w: 340, h: 240, tile: 'wood' },
     { x: 1100, y: 400, w: 200, h: 200, tile: 'bathroom' },
-    { x: 900, y: 800, w: 200, h: 200, tile: 'wood' }
+    { x: 900, y: 800, w: 200, h: 240, tile: 'wood' }
+  ];
+
+  // Glass windows that can be destroyed by bullets
+  const glassTiles = [
+    { id: 'glass_top_1', x: 708, y: 380, w: 64, h: 32 },
+    { id: 'glass_top_2', x: 772, y: 380, w: 64, h: 32 },
+    { id: 'glass_top_3', x: 900, y: 380, w: 64, h: 32 },
+    { id: 'glass_top_4', x: 964, y: 380, w: 64, h: 32 },
+    { id: 'glass_left_1', x: 580, y: 508, w: 32, h: 64 },
+    { id: 'glass_left_2', x: 580, y: 572, w: 32, h: 64 }
   ];
 
   const decorations = [
-    { x: 620, y: 420, w: 64, h: 128, tile: 'couch_green_left', collidable: true },
-    { x: 684, y: 420, w: 64, h: 128, tile: 'couch_green_right', collidable: true },
-    { x: 800, y: 550, w: 64, h: 64, tile: 'table_round', collidable: true },
-    { x: 980, y: 720, w: 64, h: 64, tile: 'rug' },
-    { x: 1150, y: 450, w: 64, h: 64, tile: 'plant' },
-    { x: 620, y: 850, w: 64, h: 64, tile: 'table_round', collidable: true },
     { x: 700, y: 840, w: 128, h: 64, tile: 'couch_teal', collidable: true },
     { x: 400, y: 300, w: 64, h: 64, tile: 'bush', collidable: true },
     { x: 450, y: 350, w: 64, h: 64, tile: 'bush', collidable: true },
-    { x: 1400, y: 500, w: 64, h: 64, tile: 'bush', collidable: true },
     { x: 1450, y: 600, w: 64, h: 64, tile: 'bush', collidable: true },
     { x: 300, y: 900, w: 64, h: 64, tile: 'bush', collidable: true },
     { x: 1500, y: 300, w: 64, h: 64, tile: 'crate', collidable: true },
-    { x: 1564, y: 300, w: 64, h: 64, tile: 'crate', collidable: true }
+    { x: 1564, y: 300, w: 64, h: 64, tile: 'crate', collidable: true },
+    // Kitchen wall (shelves with appliances)
+    { x: 1016, y: 828, w: 64, h: 64, tile: 'kitchen_shelf', collidable: true },
+    { x: 1016, y: 892, w: 64, h: 64, tile: 'kitchen_shelf', collidable: true },
+    { x: 1016, y: 956, w: 64, h: 64, tile: 'kitchen_shelf', collidable: true },
+    { x: 1016, y: 828, w: 64, h: 64, tile: 'kitchen_323', collidable: true, rotate: -90 },
+    { x: 1016, y: 892, w: 64, h: 64, tile: 'kitchen_324', collidable: true, rotate: -90 },
+    { x: 1016, y: 956, w: 64, h: 64, tile: 'kitchen_268', collidable: true, rotate: -90 }
   ];
 
+  // Collision walls (rectangles for physics)
   const buildingWalls = [
-    { x: 580, y: 380, w: 540, h: 20 },
-    { x: 580, y: 380, w: 20, h: 440 },
-    { x: 580, y: 800, w: 240, h: 20 },
-    { x: 880, y: 800, w: 240, h: 20 },
-    { x: 1100, y: 380, w: 220, h: 20 },
-    { x: 1300, y: 380, w: 20, h: 240 },
-    { x: 1100, y: 600, w: 220, h: 20 },
-    { x: 1100, y: 400, w: 20, h: 100 },
-    { x: 1100, y: 550, w: 20, h: 70 },
-    { x: 580, y: 820, w: 20, h: 200 },
-    { x: 580, y: 1000, w: 340, h: 20 },
-    { x: 900, y: 820, w: 20, h: 100 },
-    { x: 1080, y: 820, w: 20, h: 200 },
-    { x: 900, y: 1000, w: 200, h: 20 }
+    // Main house top wall (thinner for window visibility)
+    { x: 580, y: 380, w: 540, h: 32 },
+    // Main house left wall (thinner for window visibility)
+    { x: 580, y: 380, w: 32, h: 384 },
+    // Divider wall left section (with doorway gap from 836-888)
+    { x: 580, y: 764, w: 256, h: 64 },
+    // Divider wall right section
+    { x: 888, y: 764, w: 192, h: 64 },
+    // Bathroom top wall
+    { x: 1092, y: 380, w: 228, h: 64 },
+    // Bathroom right wall
+    { x: 1284, y: 380, w: 64, h: 256 },
+    // Bathroom bottom wall
+    { x: 1092, y: 572, w: 256, h: 64 },
+    // Bathroom left wall (with door gap)
+    { x: 1092, y: 400, w: 64, h: 108 },
+    // Lower left room left wall
+    { x: 580, y: 764, w: 64, h: 320 },
+    // Bottom wall left section
+    { x: 580, y: 1020, w: 384, h: 64 },
+    // Bottom wall right section
+    { x: 900, y: 1020, w: 244, h: 64 },
+    // Lower right room right wall
+    { x: 1080, y: 764, w: 64, h: 320 }
+  ];
+
+  // Visual wall tiles (for rendering)
+  // Use rotate: 90 for vertical walls (rotated tile_113)
+  const wallTiles = [
+    // Main house top wall (with windows)
+    { x: 580, y: 380, tile: 'nw_corner' },
+    { x: 644, y: 380, tile: 'horizontal' },
+    { x: 708, y: 380, tile: 'glass_horizontal' },
+    { x: 772, y: 380, tile: 'glass_horizontal' },
+    { x: 836, y: 380, tile: 'horizontal' },
+    { x: 900, y: 380, tile: 'glass_horizontal' },
+    { x: 964, y: 380, tile: 'glass_horizontal' },
+    { x: 1028, y: 380, tile: 'horizontal' },
+    { x: 1092, y: 380, tile: 'separator_down' },
+    // Main house left wall (with windows)
+    { x: 580, y: 444, tile: 'horizontal', rotate: 90 },
+    { x: 580, y: 508, tile: 'glass_vertical' },
+    { x: 580, y: 572, tile: 'glass_vertical' },
+    { x: 580, y: 636, tile: 'horizontal', rotate: 90 },
+    { x: 580, y: 700, tile: 'horizontal', rotate: 90 },
+    // Divider wall left section (intersection at y:764 covers down to divider)
+    { x: 580, y: 764, tile: 'separator_down', rotate: -90 },
+    { x: 644, y: 764, tile: 'horizontal' },
+    { x: 708, y: 764, tile: 'horizontal' },
+    { x: 772, y: 764, tile: 'end_right' },
+    // Divider wall right section (doorway gap, then horizontal at y:764)
+    { x: 888, y: 764, tile: 'end_right', rotate: 180 },
+    { x: 952, y: 764, tile: 'horizontal' },
+    { x: 1016, y: 764, tile: 'horizontal' },
+    // Bathroom top wall
+    { x: 1156, y: 380, tile: 'horizontal' },
+    { x: 1220, y: 380, tile: 'horizontal' },
+    { x: 1284, y: 380, tile: 'ne_corner' },
+    // Bathroom right wall (vertical)
+    { x: 1284, y: 444, tile: 'horizontal', rotate: 90 },
+    { x: 1284, y: 508, tile: 'horizontal', rotate: 90 },
+    { x: 1284, y: 572, tile: 'nw_corner', rotate: 180 },
+    // Bathroom bottom wall
+    { x: 1092, y: 572, tile: 'end_right', rotate: 180 },
+    { x: 1156, y: 572, tile: 'horizontal' },
+    { x: 1220, y: 572, tile: 'horizontal' },
+    // Internal wall between main and bathroom (with door gap)
+    { x: 1092, y: 444, tile: 'end_down' },
+    // Lower left room walls (vertical - rotated tile_111)
+    { x: 580, y: 828, tile: 'horizontal', rotate: 90 },
+    { x: 580, y: 892, tile: 'horizontal', rotate: 90 },
+    { x: 580, y: 956, tile: 'horizontal', rotate: 90 },
+    { x: 580, y: 1020, tile: 'ne_corner', rotate: 180 },
+    { x: 644, y: 1020, tile: 'horizontal' },
+    { x: 708, y: 1020, tile: 'horizontal' },
+    { x: 772, y: 1020, tile: 'horizontal' },
+    { x: 836, y: 1020, tile: 'horizontal' },
+    // Room divider bottom connection
+    { x: 900, y: 1020, tile: 'horizontal' },
+    // Right side bottom wall
+    { x: 964, y: 1020, tile: 'horizontal' },
+    { x: 1028, y: 1020, tile: 'horizontal' },
+    // Lower right room right wall (vertical) - corner connects to divider
+    { x: 1080, y: 764, tile: 'ne_corner' },
+    { x: 1080, y: 828, tile: 'horizontal', rotate: 90 },
+    { x: 1080, y: 892, tile: 'horizontal', rotate: 90 },
+    { x: 1080, y: 956, tile: 'horizontal', rotate: 90 },
+    { x: 1080, y: 1020, tile: 'nw_corner', rotate: 180 }
   ];
 
   // ==========================================
@@ -147,6 +241,16 @@
       const dx = x - closestX;
       const dy = y - closestY;
       if ((dx * dx + dy * dy) < (radius * radius)) return true;
+    }
+    return false;
+  }
+
+  function checkGlassCollision(x, y, destroyedGlass) {
+    for (const glass of glassTiles) {
+      if (destroyedGlass && destroyedGlass.includes(glass.id)) continue;
+      if (x >= glass.x && x <= glass.x + glass.w && y >= glass.y && y <= glass.y + glass.h) {
+        return glass;
+      }
     }
     return false;
   }
@@ -193,6 +297,7 @@
   // ==========================================
   let zombieIdCounter = 0;
   let itemIdCounter = 0;
+  let grenadeIdCounter = 0;
 
   function createGameState(playerId, playerName, seed) {
     // Use provided seed or generate random one
@@ -220,11 +325,13 @@
           score: 0,
           weapon: 'pistol',
           ammo: 0,
+          grenades: 0,
           input: { up: false, down: false, left: false, right: false }
         }
       },
       projectiles: [],
       zombies: [],
+      grenades: [],
       items: [],
       currentPhase: 1,
       zombiesSpawnedThisPhase: 0,
@@ -289,6 +396,27 @@
   }
 
   // ==========================================
+  // GRENADE THROWING
+  // ==========================================
+  function createGrenade(player, gameState) {
+    if (player.grenades <= 0) return null;
+
+    player.grenades--;
+
+    const C = CONSTANTS;
+    return {
+      id: 'g_' + (++grenadeIdCounter),
+      x: player.x,
+      y: player.y,
+      vx: Math.cos(player.angle) * C.GRENADE_SPEED,
+      vy: Math.sin(player.angle) * C.GRENADE_SPEED,
+      ownerId: player.playerId,
+      spawnTime: Date.now(),
+      distanceTraveled: 0
+    };
+  }
+
+  // ==========================================
   // MAIN UPDATE FUNCTION
   // ==========================================
   function updateGameState(gameState, now, events) {
@@ -330,13 +458,27 @@
       if (!checkWallCollision(newX, player.y, 20) && !checkDecorationCollision(newX, player.y, 15)) {
         player.x = newX;
       } else {
+        // Wall slide: blocked on X, slide vertically opposite to aim direction
         player.vx = 0;
+        if (input.left || input.right) {
+          const aimY = Math.sin(player.angle);
+          const slideSpeed = C.ACCELERATION * 0.8;
+          // If aiming down, slide up; if aiming up, slide down
+          player.vy += aimY > 0 ? -slideSpeed : slideSpeed;
+        }
       }
 
       if (!checkWallCollision(player.x, newY, 20) && !checkDecorationCollision(player.x, newY, 15)) {
         player.y = newY;
       } else {
+        // Wall slide: blocked on Y, slide horizontally opposite to aim direction
         player.vy = 0;
+        if (input.up || input.down) {
+          const aimX = Math.cos(player.angle);
+          const slideSpeed = C.ACCELERATION * 0.8;
+          // If aiming right, slide left; if aiming left, slide right
+          player.vx += aimX > 0 ? -slideSpeed : slideSpeed;
+        }
       }
     }
 
@@ -452,6 +594,95 @@
             break;
           }
         }
+      }
+    }
+
+    // 1.5 Process Grenades
+    for (let i = gameState.grenades.length - 1; i >= 0; i--) {
+      const g = gameState.grenades[i];
+
+      // Apply friction
+      g.vx *= C.GRENADE_FRICTION;
+      g.vy *= C.GRENADE_FRICTION;
+
+      // Move grenade
+      const speed = Math.sqrt(g.vx * g.vx + g.vy * g.vy);
+      const newX = g.x + g.vx;
+      const newY = g.y + g.vy;
+      g.distanceTraveled += speed;
+
+      // Check wall/decoration collision - stop moving
+      let hitObstacle = false;
+      if (checkWallCollision(newX, newY, 8) || checkDecorationCollision(newX, newY, 8)) {
+        hitObstacle = true;
+        g.vx = 0;
+        g.vy = 0;
+      } else {
+        g.x = newX;
+        g.y = newY;
+      }
+
+      // Stop if max distance reached
+      if (g.distanceTraveled >= C.GRENADE_MAX_DISTANCE) {
+        g.vx = 0;
+        g.vy = 0;
+      }
+
+      // Check fuse time - explode
+      if (now - g.spawnTime >= C.GRENADE_FUSE_TIME) {
+        // Damage all players in blast radius
+        for (const id in gameState.players) {
+          const player = gameState.players[id];
+          if (player.hp <= 0) continue;
+
+          const dx = player.x - g.x;
+          const dy = player.y - g.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+
+          if (dist < C.GRENADE_BLAST_RADIUS) {
+            const damage = Math.floor(
+              C.GRENADE_MIN_DAMAGE + (C.GRENADE_DAMAGE - C.GRENADE_MIN_DAMAGE) * (1 - dist / C.GRENADE_BLAST_RADIUS)
+            );
+            player.hp -= damage;
+            if (events.onHurt) events.onHurt(id);
+
+            if (player.hp <= 0) {
+              player.hp = 0;
+              const thrower = gameState.players[g.ownerId];
+              const killerName = thrower ? thrower.name : 'Grenade';
+              if (events.onPlayerDeath) events.onPlayerDeath({ x: player.x, y: player.y, killerName, victimName: player.name });
+            }
+          }
+        }
+
+        // Damage zombies in blast radius
+        for (const zombie of gameState.zombies) {
+          const dx = zombie.x - g.x;
+          const dy = zombie.y - g.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+
+          if (dist < C.GRENADE_BLAST_RADIUS) {
+            const damage = Math.floor(
+              C.GRENADE_MIN_DAMAGE + (C.GRENADE_DAMAGE - C.GRENADE_MIN_DAMAGE) * (1 - dist / C.GRENADE_BLAST_RADIUS)
+            );
+            zombie.hp -= damage;
+
+            if (zombie.hp <= 0) {
+              if (events.onZombieDeath) events.onZombieDeath({ x: zombie.x, y: zombie.y });
+              gameState.zombiesKilledThisPhase++;
+              const killer = gameState.players[g.ownerId];
+              if (killer) {
+                killer.score += zombie.weapon ? 75 : 50;
+              }
+            }
+          }
+        }
+
+        // Trigger explosion event
+        if (events.onGrenadeExplode) events.onGrenadeExplode({ x: g.x, y: g.y, id: g.id });
+
+        // Remove grenade
+        gameState.grenades.splice(i, 1);
       }
     }
 
@@ -783,6 +1014,9 @@
               player.weapon = 'shotgun';
               player.ammo = WEAPONS.shotgun.maxAmmo;
               if (events.onWeaponPickup) events.onWeaponPickup(player.playerId, { weapon: 'shotgun', ammo: player.ammo });
+            } else if (item.type === 'grenade') {
+              player.grenades = (player.grenades || 0) + 1;
+              if (events.onGrenadePickup) events.onGrenadePickup(player.playerId, player.grenades);
             }
 
             // In training mode, respawn weapons in house after short delay
@@ -822,6 +1056,8 @@
   exports.floors = floors;
   exports.decorations = decorations;
   exports.buildingWalls = buildingWalls;
+  exports.wallTiles = wallTiles;
+  exports.glassTiles = glassTiles;
   exports.checkWallCollision = checkWallCollision;
   exports.checkDecorationCollision = checkDecorationCollision;
   exports.canSeePlayer = canSeePlayer;
@@ -831,6 +1067,7 @@
   exports.getZombieSightRadius = getZombieSightRadius;
   exports.createGameState = createGameState;
   exports.createProjectile = createProjectile;
+  exports.createGrenade = createGrenade;
   exports.updateGameState = updateGameState;
   exports.createSeededRNG = createSeededRNG;
 

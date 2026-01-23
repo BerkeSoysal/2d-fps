@@ -2,6 +2,30 @@ const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 const socket = io();
 
+// Hot reload: refresh page when server restarts (dev mode)
+let wasDisconnected = false;
+socket.on('disconnect', () => { wasDisconnected = true; });
+socket.on('connect', () => { if (wasDisconnected) location.reload(); });
+
+// Press B to redraw map without reload (dev mode)
+window.addEventListener('keydown', (e) => {
+    if (e.key === 'b' && isTrainingMode) {
+        // Re-fetch map data from GameLogic module by reloading the script
+        const script = document.createElement('script');
+        script.src = 'gameLogic.js?t=' + Date.now();
+        script.onload = () => {
+            walls = GameLogic.buildingWalls;
+            floors = GameLogic.floors;
+            decorations = GameLogic.decorations;
+            visualWallTiles = GameLogic.wallTiles;
+            backgroundRendered = false;
+            tryRenderBackground();
+            console.log('Map redrawn!');
+        };
+        document.head.appendChild(script);
+    }
+});
+
 // Mobile detection (early for performance constants)
 const isMobile = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
 
@@ -75,9 +99,13 @@ let currentPhase = 1;
 let scoreSubmitted = false;
 let scoreToken = null; // Token for verified score submission
 let myAmmo = 0;
+let myGrenades = 0;
 let isSinglePlayer = false;
 let isPaused = false;
 let isPvpMode = false;
+
+// Active grenades for rendering
+let grenades = [];
 
 // Offline single player state
 let isOfflineSinglePlayer = false;
@@ -120,6 +148,7 @@ singlePlayerBtn.addEventListener('click', async () => {
         walls = GameLogic.buildingWalls;
         floors = GameLogic.floors;
         decorations = GameLogic.decorations;
+        visualWallTiles = GameLogic.wallTiles;
         backgroundRendered = false; // Reset to re-render background
 
         // Initialize game variables
@@ -177,6 +206,7 @@ trainingModeBtn.addEventListener('click', () => {
     walls = GameLogic.buildingWalls;
     floors = GameLogic.floors;
     decorations = GameLogic.decorations;
+    visualWallTiles = GameLogic.wallTiles;
     backgroundRendered = false; // Reset to re-render background
 
     // Initialize game variables
@@ -184,15 +214,21 @@ trainingModeBtn.addEventListener('click', () => {
     projectiles = localGameState.projectiles;
     zombies = localGameState.zombies;
     items = localGameState.items;
+    grenades = localGameState.grenades;
 
     // Spawn all weapon types in the house
     const houseWeapons = [
         { type: 'machine_gun', x: 700, y: 500 },
-        { type: 'shotgun', x: 800, y: 500 }
+        { type: 'shotgun', x: 800, y: 500 },
+        { type: 'grenade', x: 750, y: 600 }
     ];
     houseWeapons.forEach((w, i) => {
         items.push({ id: 'training_weapon_' + i, type: w.type, x: w.x, y: w.y });
     });
+
+    // Give player some starting grenades for training
+    localGameState.players[localPlayerId].grenades = 3;
+    myGrenades = 3;
 
     // Spawn initial training zombies (stationary)
     for (let i = 0; i < 10; i++) {
@@ -573,6 +609,19 @@ window.addEventListener('keydown', (e) => {
             socket.emit('restart');
         }
     }
+
+    // E key for throwing grenade
+    if (key === 'e') {
+        const myPlayer = isOfflineSinglePlayer ? localGameState?.players?.[localPlayerId] : players[socket.id];
+        if (myPlayer && myPlayer.hp > 0 && myGrenades > 0) {
+            if (isOfflineSinglePlayer) {
+                // Handle offline grenade throwing
+                throwLocalGrenade();
+            } else {
+                socket.emit('throwGrenade');
+            }
+        }
+    }
 });
 
 window.addEventListener('keyup', (e) => {
@@ -582,6 +631,36 @@ window.addEventListener('keyup', (e) => {
     if (key === 's') keys.s = false;
     if (key === 'd') keys.d = false;
 });
+
+// Throw grenade in offline single player mode
+function throwLocalGrenade() {
+    if (!localGameState || !localGameState.players[localPlayerId]) return;
+
+    const player = localGameState.players[localPlayerId];
+    if (player.grenades <= 0) return;
+
+    // Log the grenade throw for replay verification
+    if (localGameState.inputLog) {
+        localGameState.inputLog.push({
+            f: localGameState.frame,
+            g: 1 // grenade throw event
+        });
+    }
+
+    const grenade = GameLogic.createGrenade(player, localGameState);
+    if (grenade) {
+        localGameState.grenades.push(grenade);
+        grenades = localGameState.grenades;
+        myGrenades = player.grenades;
+        updateWeaponDisplay();
+
+        const msgDiv = document.createElement('div');
+        msgDiv.className = 'chatMessage system';
+        msgDiv.innerHTML = `💣 Grenade thrown! (${myGrenades} remaining)`;
+        chatMessages.appendChild(msgDiv);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+}
 
 // ESC key for pause menu
 window.addEventListener('keydown', (e) => {
@@ -1092,6 +1171,7 @@ let projectiles = [];
 let zombies = [];
 let items = [];
 let walls = [];
+let visualWallTiles = [];
 let floors = [];
 let flashOpacity = 0;
 let currentWeapon = 'pistol';
@@ -1260,10 +1340,37 @@ const woodFloorImg = new Image();
 woodFloorImg.src = 'kenney_top-down-shooter/PNG/Tiles/tile_46.png';
 
 const bathroomFloorImg = new Image();
-bathroomFloorImg.src = 'kenney_top-down-shooter/PNG/Tiles/tile_496.png'; // Light blue/teal tile
+bathroomFloorImg.src = 'kenney_top-down-shooter/PNG/Tiles/tile_11.png';
 
+// Wall tiles for different positions
+const wallTiles = {
+    nw_corner: new Image(),      // tile_109 - northwest corner
+    ne_corner: new Image(),      // tile_110 - northeast corner
+    horizontal: new Image(),     // tile_111 - straight horizontal
+    separator_down: new Image(), // tile_112 - separator extends left/right/down
+    separator_up: new Image(),   // tile_113 - separator extends left/right/up
+    end_right: new Image(),      // tile_114 - wall ends at right
+    end_down: new Image(),       // tile_115 - wall ends at down
+    tl_corner: new Image(),      // tile_116 - top left corner
+    tr_corner: new Image(),      // tile_117 - top right corner
+    glass_vertical: new Image(), // tile_489 - vertical glass window
+    glass_horizontal: new Image() // tile_490 - horizontal glass window
+};
+wallTiles.nw_corner.src = 'kenney_top-down-shooter/PNG/Tiles/tile_109.png';
+wallTiles.ne_corner.src = 'kenney_top-down-shooter/PNG/Tiles/tile_110.png';
+wallTiles.horizontal.src = 'kenney_top-down-shooter/PNG/Tiles/tile_111.png';
+wallTiles.separator_down.src = 'kenney_top-down-shooter/PNG/Tiles/tile_112.png';
+wallTiles.separator_up.src = 'kenney_top-down-shooter/PNG/Tiles/tile_113.png';
+wallTiles.end_right.src = 'kenney_top-down-shooter/PNG/Tiles/tile_114.png';
+wallTiles.end_down.src = 'kenney_top-down-shooter/PNG/Tiles/tile_115.png';
+wallTiles.tl_corner.src = 'kenney_top-down-shooter/PNG/Tiles/tile_116.png';
+wallTiles.tr_corner.src = 'kenney_top-down-shooter/PNG/Tiles/tile_117.png';
+wallTiles.glass_vertical.src = 'kenney_top-down-shooter/PNG/Tiles/tile_487.png';
+wallTiles.glass_horizontal.src = 'kenney_top-down-shooter/PNG/Tiles/tile_514.png';
+
+// Default wall image (for collision rectangles that aren't rendered with specific tiles)
 const wallImg = new Image();
-wallImg.src = 'kenney_top-down-shooter/PNG/Tiles/tile_109.png';
+wallImg.src = 'kenney_top-down-shooter/PNG/Tiles/tile_111.png';
 
 // Decoration tiles
 const decorationTiles = {
@@ -1274,7 +1381,11 @@ const decorationTiles = {
     rug: new Image(),
     plant: new Image(),
     bush: new Image(),
-    crate: new Image()
+    crate: new Image(),
+    kitchen_323: new Image(),
+    kitchen_324: new Image(),
+    kitchen_268: new Image(),
+    kitchen_shelf: new Image()
 };
 decorationTiles.couch_green_left.src = 'kenney_top-down-shooter/PNG/Tiles/tile_181.png';
 decorationTiles.couch_green_right.src = 'kenney_top-down-shooter/PNG/Tiles/tile_182.png';
@@ -1284,6 +1395,10 @@ decorationTiles.rug.src = 'kenney_top-down-shooter/PNG/Tiles/tile_156.png';
 decorationTiles.plant.src = 'kenney_top-down-shooter/PNG/Tiles/tile_183.png';
 decorationTiles.bush.src = 'kenney_top-down-shooter/PNG/Tiles/tile_183.png';
 decorationTiles.crate.src = 'kenney_top-down-shooter/PNG/Tiles/tile_129.png';
+decorationTiles.kitchen_323.src = 'kenney_top-down-shooter/PNG/Tiles/tile_323.png';
+decorationTiles.kitchen_324.src = 'kenney_top-down-shooter/PNG/Tiles/tile_324.png';
+decorationTiles.kitchen_268.src = 'kenney_top-down-shooter/PNG/Tiles/tile_268.png';
+decorationTiles.kitchen_shelf.src = 'kenney_top-down-shooter/PNG/Tiles/tile_321.png';
 
 // Item sprites
 const itemSprites = {
@@ -1341,19 +1456,23 @@ function renderStaticBackground() {
         }
     }
 
-    // Draw walls
-    for (const wall of walls) {
-        if (wallImg.complete) {
-            for (let x = wall.x; x < wall.x + wall.w; x += TILE_SIZE) {
-                for (let y = wall.y; y < wall.y + wall.h; y += TILE_SIZE) {
-                    const drawW = Math.min(TILE_SIZE, wall.x + wall.w - x);
-                    const drawH = Math.min(TILE_SIZE, wall.y + wall.h - y);
-                    backgroundCtx.drawImage(wallImg, x, y, drawW, drawH);
-                }
+    // Draw walls using visual wall tiles
+    for (const wt of visualWallTiles) {
+        const img = wallTiles[wt.tile];
+        if (img && img.complete) {
+            if (wt.rotate) {
+                // Draw with rotation
+                backgroundCtx.save();
+                backgroundCtx.translate(wt.x + TILE_SIZE / 2, wt.y + TILE_SIZE / 2);
+                backgroundCtx.rotate(wt.rotate * Math.PI / 180);
+                backgroundCtx.drawImage(img, -TILE_SIZE / 2, -TILE_SIZE / 2, TILE_SIZE, TILE_SIZE);
+                backgroundCtx.restore();
+            } else {
+                backgroundCtx.drawImage(img, wt.x, wt.y, TILE_SIZE, TILE_SIZE);
             }
         } else {
             backgroundCtx.fillStyle = '#333';
-            backgroundCtx.fillRect(wall.x, wall.y, wall.w, wall.h);
+            backgroundCtx.fillRect(wt.x, wt.y, TILE_SIZE, TILE_SIZE);
         }
     }
 
@@ -1361,7 +1480,15 @@ function renderStaticBackground() {
     for (const deco of decorations) {
         const img = decorationTiles[deco.tile];
         if (img && img.complete) {
-            backgroundCtx.drawImage(img, deco.x, deco.y, deco.w, deco.h);
+            if (deco.rotate) {
+                backgroundCtx.save();
+                backgroundCtx.translate(deco.x + deco.w / 2, deco.y + deco.h / 2);
+                backgroundCtx.rotate(deco.rotate * Math.PI / 180);
+                backgroundCtx.drawImage(img, -deco.w / 2, -deco.h / 2, deco.w, deco.h);
+                backgroundCtx.restore();
+            } else {
+                backgroundCtx.drawImage(img, deco.x, deco.y, deco.w, deco.h);
+            }
         }
     }
 
@@ -1383,6 +1510,7 @@ socket.on('mapData', (data) => {
     walls = data.walls || [];
     floors = data.floors || [];
     decorations = data.decorations || [];
+    visualWallTiles = data.wallTiles || [];
     backgroundRendered = false; // Reset to re-render with new map data
     tryRenderBackground();
 });
@@ -1392,6 +1520,7 @@ socket.on('stateUpdate', (state) => {
     projectiles = state.projectiles;
     zombies = state.zombies || [];
     items = state.items || [];
+    grenades = state.grenades || [];
 
     // Update team score (shared score in multiplayer)
     if (state.teamScore !== undefined) {
@@ -1402,6 +1531,7 @@ socket.on('stateUpdate', (state) => {
     const myPlayer = players[socket.id];
     if (myPlayer) {
         currentWeapon = myPlayer.weapon || 'pistol';
+        myGrenades = myPlayer.grenades || 0;
 
         // Update score display with team score
         if (scoreDisplay) {
@@ -1447,6 +1577,53 @@ socket.on('ammoUpdate', (data) => {
     updateWeaponDisplay();
 });
 
+// Grenade events
+socket.on('grenadePickup', (data) => {
+    myGrenades = data.grenades;
+    updateWeaponDisplay();
+    const msgDiv = document.createElement('div');
+    msgDiv.className = 'chatMessage system';
+    msgDiv.innerHTML = `💣 Picked up a grenade! (${myGrenades} total)`;
+    chatMessages.appendChild(msgDiv);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+});
+
+socket.on('grenadeUpdate', (data) => {
+    myGrenades = data.grenades;
+    updateWeaponDisplay();
+});
+
+socket.on('grenadeThrown', (data) => {
+    // Add grenade to local rendering list
+    grenades.push({
+        id: data.id,
+        x: data.x,
+        y: data.y,
+        vx: data.vx,
+        vy: data.vy
+    });
+});
+
+socket.on('grenadeExplode', (data) => {
+    // Remove grenade and show explosion effect
+    grenades = grenades.filter(g => !(Math.abs(g.x - data.x) < 20 && Math.abs(g.y - data.y) < 20));
+
+    // Add explosion visual effect
+    for (let i = 0; i < 20; i++) {
+        const angle = (Math.PI * 2 * i) / 20;
+        const dist = Math.random() * 100 + 50;
+        bloodSplatters.push({
+            x: data.x + Math.cos(angle) * dist * Math.random(),
+            y: data.y + Math.sin(angle) * dist * Math.random(),
+            size: Math.random() * 10 + 5,
+            opacity: 1,
+            createdAt: Date.now(),
+            isExplosion: true
+        });
+    }
+    playSound('grenadeExplode');
+});
+
 // Handle weapon change (when out of ammo)
 socket.on('weaponChange', (data) => {
     stopMachineGunSound(); // Stop if switching from machine gun
@@ -1476,6 +1653,11 @@ function updateWeaponDisplay() {
     } else {
         displayText = '🔫 Pistol ∞';
         className = '';
+    }
+
+    // Add grenade count if player has any
+    if (myGrenades > 0) {
+        displayText += ` | 💣 ${myGrenades}`;
     }
 
     if (weaponDisplay) {
@@ -1822,6 +2004,50 @@ function playSound(type) {
         gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
         osc.start();
         osc.stop(audioCtx.currentTime + 0.2);
+    } else if (type === 'grenadeExplode') {
+        // Deep explosion sound with rumble
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(100, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(30, audioCtx.currentTime + 0.5);
+        gainNode.gain.setValueAtTime(0.4, audioCtx.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.5);
+
+        // Add a noise burst for the explosion crackle
+        const noiseOsc = audioCtx.createOscillator();
+        const noiseGain = audioCtx.createGain();
+        noiseOsc.connect(noiseGain);
+        noiseGain.connect(audioCtx.destination);
+        noiseOsc.type = 'square';
+        noiseOsc.frequency.setValueAtTime(200, audioCtx.currentTime);
+        noiseOsc.frequency.exponentialRampToValueAtTime(50, audioCtx.currentTime + 0.3);
+        noiseGain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+        noiseGain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+        noiseOsc.start();
+        noiseOsc.stop(audioCtx.currentTime + 0.3);
+    } else if (type === 'glassBreak') {
+        // High pitched shattering glass sound
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(2000, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(800, audioCtx.currentTime + 0.15);
+        gainNode.gain.setValueAtTime(0.15, audioCtx.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.15);
+
+        // Add crackle for glass shards
+        const crackle = audioCtx.createOscillator();
+        const crackleGain = audioCtx.createGain();
+        crackle.connect(crackleGain);
+        crackleGain.connect(audioCtx.destination);
+        crackle.type = 'sawtooth';
+        crackle.frequency.setValueAtTime(3000, audioCtx.currentTime);
+        crackle.frequency.exponentialRampToValueAtTime(500, audioCtx.currentTime + 0.1);
+        crackleGain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+        crackleGain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+        crackle.start();
+        crackle.stop(audioCtx.currentTime + 0.1);
     }
 }
 
@@ -1937,7 +2163,8 @@ function draw() {
     for (let i = bloodSplatters.length - 1; i >= 0; i--) {
         const blood = bloodSplatters[i];
         const age = now - blood.createdAt;
-        const fadeTime = bloodFadeTime;
+        // Explosions fade faster
+        const fadeTime = blood.isExplosion ? 500 : bloodFadeTime;
 
         if (age > fadeTime) {
             bloodSplatters.splice(i, 1);
@@ -1945,10 +2172,25 @@ function draw() {
         }
 
         const opacity = 1 - (age / fadeTime);
-        ctx.fillStyle = `rgba(139, 0, 0, ${opacity * 0.8})`; // Dark red
-        ctx.beginPath();
-        ctx.arc(blood.x, blood.y, blood.size, 0, Math.PI * 2);
-        ctx.fill();
+
+        if (blood.isExplosion) {
+            // Orange/yellow explosion effect with larger size
+            const explosionSize = blood.size || 80;
+            const gradient = ctx.createRadialGradient(blood.x, blood.y, 0, blood.x, blood.y, explosionSize);
+            gradient.addColorStop(0, `rgba(255, 200, 50, ${opacity})`);
+            gradient.addColorStop(0.3, `rgba(255, 100, 0, ${opacity * 0.8})`);
+            gradient.addColorStop(0.7, `rgba(200, 50, 0, ${opacity * 0.5})`);
+            gradient.addColorStop(1, `rgba(100, 20, 0, 0)`);
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.arc(blood.x, blood.y, explosionSize, 0, Math.PI * 2);
+            ctx.fill();
+        } else {
+            ctx.fillStyle = `rgba(139, 0, 0, ${opacity * 0.8})`; // Dark red
+            ctx.beginPath();
+            ctx.arc(blood.x, blood.y, blood.size, 0, Math.PI * 2);
+            ctx.fill();
+        }
     }
 
     // Draw and update dust particles (walking effect)
@@ -1979,6 +2221,7 @@ function draw() {
         let glowColor;
         if (item.type === 'health') glowColor = 'rgba(0, 255, 100, 0.4)';
         else if (item.type === 'machine_gun') glowColor = 'rgba(255, 165, 0, 0.4)';
+        else if (item.type === 'grenade') glowColor = 'rgba(100, 100, 100, 0.4)';
         else glowColor = 'rgba(255, 50, 50, 0.4)';
 
         ctx.fillStyle = glowColor;
@@ -1996,7 +2239,8 @@ function draw() {
         ctx.font = 'bold 12px Arial';
         ctx.textAlign = 'center';
         const label = item.type === 'machine_gun' ? 'MACHINE GUN' :
-            item.type === 'shotgun' ? 'SHOTGUN' : 'HEALTH +25';
+            item.type === 'shotgun' ? 'SHOTGUN' :
+            item.type === 'grenade' ? 'GRENADE' : 'HEALTH +25';
 
         // Text background
         const textWidth = ctx.measureText(label).width;
@@ -2004,8 +2248,30 @@ function draw() {
         ctx.fillRect(item.x - textWidth / 2 - 4, item.y + 28, textWidth + 8, 16);
 
         // Text
-        ctx.fillStyle = item.type === 'health' ? '#2ecc71' : '#f1c40f';
+        ctx.fillStyle = item.type === 'health' ? '#2ecc71' :
+            item.type === 'grenade' ? '#888' : '#f1c40f';
         ctx.fillText(label, item.x, item.y + 40);
+    }
+
+    // Draw Grenades (in-flight)
+    for (const g of grenades) {
+        ctx.save();
+        ctx.translate(g.x, g.y);
+
+        // Draw grenade body (olive green oval)
+        ctx.fillStyle = '#556B2F';
+        ctx.beginPath();
+        ctx.ellipse(0, 0, 8, 10, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#3d4f22';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // Draw pin/lever area
+        ctx.fillStyle = '#8B4513';
+        ctx.fillRect(-3, -14, 6, 5);
+
+        ctx.restore();
     }
 
     // Draw Zombies
@@ -2783,6 +3049,42 @@ function startLocalGameLoop() {
                 chatMessages.appendChild(msgDiv);
                 chatMessages.scrollTop = chatMessages.scrollHeight;
             }
+        },
+        onGrenadePickup: (playerId, grenadeCount) => {
+            if (playerId === localPlayerId) {
+                myGrenades = grenadeCount;
+                updateWeaponDisplay();
+                const msgDiv = document.createElement('div');
+                msgDiv.className = 'chatMessage system';
+                msgDiv.innerHTML = `💣 Picked up a grenade! (${myGrenades} total)`;
+                chatMessages.appendChild(msgDiv);
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            }
+        },
+        onGrenadeExplode: (data) => {
+            playSound('grenadeExplode');
+            // Add visual explosion effect (main blast)
+            bloodSplatters.push({
+                x: data.x,
+                y: data.y,
+                size: 100,
+                opacity: 1,
+                createdAt: Date.now(),
+                isExplosion: true
+            });
+            // Add smaller debris particles
+            for (let i = 0; i < 15; i++) {
+                const angle = (Math.PI * 2 * i) / 15;
+                const dist = Math.random() * 80 + 30;
+                bloodSplatters.push({
+                    x: data.x + Math.cos(angle) * dist,
+                    y: data.y + Math.sin(angle) * dist,
+                    size: Math.random() * 30 + 20,
+                    opacity: 1,
+                    createdAt: Date.now(),
+                    isExplosion: true
+                });
+            }
         }
     };
 
@@ -2839,11 +3141,20 @@ function startLocalGameLoop() {
         projectiles = localGameState.projectiles;
         zombies = localGameState.zombies;
         items = localGameState.items;
+        grenades = localGameState.grenades;
 
-        // Update score display
+        // Update score and grenade display
         if (player) {
             myScore = player.score || 0;
-            if (scoreDisplay) scoreDisplay.textContent = `Score: ${myScore}`;
+            myGrenades = player.grenades || 0;
+            if (scoreDisplay) {
+                if (isTrainingMode) {
+                    scoreDisplay.textContent = `X: ${Math.round(player.x)} Y: ${Math.round(player.y)}`;
+                } else {
+                    scoreDisplay.textContent = `Score: ${myScore}`;
+                }
+            }
+            updateWeaponDisplay();
         }
     }, 1000 / 60);
 }

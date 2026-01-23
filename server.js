@@ -368,8 +368,18 @@ const WEAPONS = {
   shotgun: { damage: 25, speed: 15, range: 300, spread: 0.4, pellets: 5, maxAmmo: 12 }
 };
 
+// Grenade constants
+const GRENADE_SPEED = 12; // Initial throw speed
+const GRENADE_FRICTION = 0.95; // Slows down as it rolls
+const GRENADE_MAX_DISTANCE = 350; // ~10m in game units
+const GRENADE_FUSE_TIME = 2000; // 2 seconds before explosion
+const GRENADE_BLAST_RADIUS = 150; // Explosion radius
+const GRENADE_DAMAGE = 80; // Max damage at center
+const GRENADE_MIN_DAMAGE = 20; // Min damage at edge
+let grenadeIdCounter = 0;
+
 // Item spawn settings
-const ITEM_TYPES = ['health', 'machine_gun', 'shotgun'];
+const ITEM_TYPES = ['health', 'machine_gun', 'shotgun', 'grenade'];
 const ITEM_SPAWN_INTERVAL = 15000; // 15 seconds
 const MAX_ITEMS = 5;
 let itemIdCounter = 0;
@@ -396,6 +406,7 @@ function createRoom(hostId, hostName, roomName, isSinglePlayer = false, isPvp = 
     projectiles: [],
     zombies: [],
     items: [],
+    grenades: [],
 
     // Team score for multiplayer
     teamScore: 0,
@@ -535,7 +546,7 @@ function canSeePlayer(zombie, player, currentPhase) { // Pass phase to use per-r
 
 io.on('connection', (socket) => {
   console.log('a user connected: ' + socket.id);
-  socket.emit('mapData', { floors, walls: buildingWalls, decorations });
+  socket.emit('mapData', { floors, walls: buildingWalls, decorations, wallTiles: GameLogic.wallTiles });
 
   socket.on('getRooms', (options) => {
     const pvp = options?.pvp || false;
@@ -619,6 +630,7 @@ io.on('connection', (socket) => {
         vx: 0, vy: 0, // Velocity for smooth movement
         playerId: p.id, name: p.name, skin: skin, score: 0,
         weapon: 'pistol', ammo: 0,
+        grenades: 0, // Grenade count
         input: { up: false, down: false, left: false, right: false } // Store input state
       };
     }
@@ -628,6 +640,7 @@ io.on('connection', (socket) => {
     room.zombiesKilledThisPhase = 0;
     room.zombies = [];
     room.projectiles = [];
+    room.grenades = [];
     room.phaseInProgress = false;
     room.phaseStartTime = Date.now();
 
@@ -753,6 +766,35 @@ io.on('connection', (socket) => {
         distanceTraveled: 0
       });
     }
+  });
+
+  // Throw grenade (E key)
+  socket.on('throwGrenade', () => {
+    const room = getPlayerRoom(socket.id);
+    if (!room || !room.inProgress) return;
+    const player = room.players[socket.id];
+    if (!player || player.hp <= 0) return;
+    if (!player.grenades || player.grenades <= 0) return;
+
+    player.grenades--;
+    io.to(socket.id).emit('grenadeUpdate', { grenades: player.grenades });
+
+    // Create grenade entity
+    const grenade = {
+      id: 'g_' + (++grenadeIdCounter),
+      x: player.x,
+      y: player.y,
+      vx: Math.cos(player.angle) * GRENADE_SPEED,
+      vy: Math.sin(player.angle) * GRENADE_SPEED,
+      ownerId: socket.id,
+      thrownAt: Date.now(),
+      distanceTraveled: 0,
+      stopped: false
+    };
+    room.grenades.push(grenade);
+
+    // Broadcast grenade throw
+    io.to(room.id).emit('grenadeThrown', { id: grenade.id, x: grenade.x, y: grenade.y, vx: grenade.vx, vy: grenade.vy });
   });
 
   socket.on('restart', () => {
@@ -1005,6 +1047,89 @@ function updateRoom(room, now) {
           break;
         }
       }
+    }
+  }
+
+  // 1.5 Process Grenades
+  for (let i = room.grenades.length - 1; i >= 0; i--) {
+    const g = room.grenades[i];
+
+    if (!g.stopped) {
+      // Move grenade
+      const speed = Math.sqrt(g.vx * g.vx + g.vy * g.vy);
+      g.x += g.vx;
+      g.y += g.vy;
+      g.distanceTraveled += speed;
+
+      // Apply friction
+      g.vx *= GRENADE_FRICTION;
+      g.vy *= GRENADE_FRICTION;
+
+      // Check wall/decoration collision
+      if (checkWallCollision(g.x, g.y, 8) || checkDecorationCollision(g.x, g.y, 8)) {
+        g.stopped = true;
+        g.vx = 0;
+        g.vy = 0;
+      }
+
+      // Check max distance or stopped rolling
+      if (g.distanceTraveled >= GRENADE_MAX_DISTANCE || speed < 0.5) {
+        g.stopped = true;
+        g.vx = 0;
+        g.vy = 0;
+      }
+
+      // Keep in bounds
+      g.x = Math.max(10, Math.min(CANVAS_WIDTH - 10, g.x));
+      g.y = Math.max(10, Math.min(CANVAS_HEIGHT - 10, g.y));
+    }
+
+    // Check if grenade should explode
+    if (now - g.thrownAt >= GRENADE_FUSE_TIME) {
+      // EXPLOSION!
+      io.to(room.id).emit('grenadeExplode', { x: g.x, y: g.y });
+
+      // Damage all entities in blast radius
+      // Damage players
+      for (const id in room.players) {
+        const player = room.players[id];
+        if (player.hp <= 0) continue;
+        const dx = player.x - g.x;
+        const dy = player.y - g.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < GRENADE_BLAST_RADIUS) {
+          // Damage falls off with distance
+          const damageFactor = 1 - (dist / GRENADE_BLAST_RADIUS);
+          const damage = Math.floor(GRENADE_MIN_DAMAGE + (GRENADE_DAMAGE - GRENADE_MIN_DAMAGE) * damageFactor);
+          player.hp -= damage;
+          io.to(id).emit('hurt');
+          if (player.hp <= 0) {
+            player.hp = 0;
+            const killerName = room.players[g.ownerId]?.name || 'Grenade';
+            io.to(room.id).emit('playerDeath', { x: player.x, y: player.y, killerName: killerName + ' (grenade)', victimName: player.name });
+          }
+        }
+      }
+
+      // Damage zombies
+      for (const zombie of room.zombies) {
+        const dx = zombie.x - g.x;
+        const dy = zombie.y - g.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < GRENADE_BLAST_RADIUS) {
+          const damageFactor = 1 - (dist / GRENADE_BLAST_RADIUS);
+          const damage = Math.floor(GRENADE_MIN_DAMAGE + (GRENADE_DAMAGE - GRENADE_MIN_DAMAGE) * damageFactor);
+          zombie.hp -= damage;
+          if (zombie.hp <= 0) {
+            io.to(room.id).emit('zombieDeath', { x: zombie.x, y: zombie.y });
+            room.zombiesKilledThisPhase++;
+            room.teamScore += zombie.weapon ? 75 : 50;
+          }
+        }
+      }
+
+      // Remove grenade
+      room.grenades.splice(i, 1);
     }
   }
 
@@ -1375,6 +1500,9 @@ function updateRoom(room, now) {
             player.weapon = 'shotgun';
             player.ammo = WEAPONS.shotgun.maxAmmo;
             io.to(player.playerId).emit('weaponPickup', { weapon: 'shotgun', ammo: player.ammo });
+          } else if (item.type === 'grenade') {
+            player.grenades = (player.grenades || 0) + 1;
+            io.to(player.playerId).emit('grenadePickup', { grenades: player.grenades });
           }
           room.items.splice(i, 1);
           break;
@@ -1392,6 +1520,7 @@ function updateRoom(room, now) {
       projectiles: room.projectiles,
       zombies: room.zombies,
       items: room.items,
+      grenades: room.grenades,
       teamScore: room.teamScore
     });
   }
