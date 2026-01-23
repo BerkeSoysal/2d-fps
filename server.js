@@ -379,13 +379,14 @@ const rooms = {};
 let roomIdCounter = 0;
 let zombieIdCounter = 0; // Global counter is fine for unique IDs
 
-function createRoom(hostId, hostName, roomName, isSinglePlayer = false) {
+function createRoom(hostId, hostName, roomName, isSinglePlayer = false, isPvp = false) {
   const roomId = 'room_' + (++roomIdCounter);
   rooms[roomId] = {
     id: roomId,
     name: roomName || `${hostName}'s Room`,
     hostId: hostId,
     isSinglePlayer: isSinglePlayer,
+    isPvp: isPvp,
     // Game State Per Room
     players: {}, // Actual game player objects {x, y, hp...}
     playerList: [{ id: hostId, name: hostName }], // Meta info for lobby
@@ -416,9 +417,9 @@ function createRoom(hostId, hostName, roomName, isSinglePlayer = false) {
   return rooms[roomId];
 }
 
-function getRoomsList() {
+function getRoomsList(pvpOnly = false) {
   return Object.values(rooms)
-    .filter(r => !r.isSinglePlayer && !r.inProgress && r.playerList.length < r.maxPlayers)
+    .filter(r => !r.isSinglePlayer && !r.inProgress && r.playerList.length < r.maxPlayers && (r.isPvp || false) === pvpOnly)
     .map(r => ({
       id: r.id,
       name: r.name,
@@ -536,15 +537,17 @@ io.on('connection', (socket) => {
   console.log('a user connected: ' + socket.id);
   socket.emit('mapData', { floors, walls: buildingWalls, decorations });
 
-  socket.on('getRooms', () => {
-    socket.emit('roomsList', getRoomsList());
+  socket.on('getRooms', (options) => {
+    const pvp = options?.pvp || false;
+    socket.emit('roomsList', getRoomsList(pvp));
   });
 
   socket.on('createRoom', (data) => {
-    const room = createRoom(socket.id, data.playerName, data.roomName);
+    const isPvp = data.isPvp || false;
+    const room = createRoom(socket.id, data.playerName, data.roomName, false, isPvp);
     socket.join(room.id);
     socket.emit('roomCreated', { roomId: room.id, room: room });
-    io.emit('roomsList', getRoomsList());
+    io.emit('roomsList', getRoomsList(isPvp));
   });
 
   socket.on('joinRoom', (data) => {
@@ -1220,8 +1223,11 @@ function updateRoom(room, now) {
     }
   }
 
-  // 4. Phase Management & Spawning
-  if (activePlayers.length === 0 && Object.keys(room.players).length > 0) {
+  // 4. Phase Management & Spawning (skip for PvP)
+  if (room.isPvp) {
+    // PvP mode: no zombies, no phases, no game over
+    // Just let players fight each other
+  } else if (activePlayers.length === 0 && Object.keys(room.players).length > 0) {
     // All players dead - trigger team game over (only once)
     if (!room.teamGameOver) {
       room.teamGameOver = true;

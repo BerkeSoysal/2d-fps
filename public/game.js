@@ -21,6 +21,7 @@ const playerNameInput = document.getElementById('playerNameInput');
 const singlePlayerBtn = document.getElementById('singlePlayerBtn');
 const trainingModeBtn = document.getElementById('trainingModeBtn');
 const multiPlayerBtn = document.getElementById('multiPlayerBtn');
+const pvpBtn = document.getElementById('pvpBtn');
 const roomSection = document.getElementById('roomSection');
 const roomList = document.getElementById('roomList');
 const createRoomBtn = document.getElementById('createRoomBtn');
@@ -76,6 +77,7 @@ let scoreToken = null; // Token for verified score submission
 let myAmmo = 0;
 let isSinglePlayer = false;
 let isPaused = false;
+let isPvpMode = false;
 
 // Offline single player state
 let isOfflineSinglePlayer = false;
@@ -237,14 +239,29 @@ multiPlayerBtn.addEventListener('click', () => {
         return;
     }
     isSinglePlayer = false;
+    isPvpMode = false;
     modeButtons.style.display = 'none';
     roomSection.style.display = 'block';
-    socket.emit('getRooms');
+    socket.emit('getRooms', { pvp: false });
+});
+
+pvpBtn.addEventListener('click', () => {
+    myName = playerNameInput.value.trim() || 'Player';
+    if (!myName) {
+        alert('Please enter your name first!');
+        return;
+    }
+    isSinglePlayer = false;
+    isPvpMode = true;
+    modeButtons.style.display = 'none';
+    roomSection.style.display = 'block';
+    socket.emit('getRooms', { pvp: true });
 });
 
 backToMenuBtn.addEventListener('click', () => {
     modeButtons.style.display = 'flex';
     roomSection.style.display = 'none';
+    isPvpMode = false;
 });
 
 // High Scores Page
@@ -333,9 +350,10 @@ async function loadHighScores() {
 
 // Create room
 createRoomBtn.addEventListener('click', () => {
-    const roomName = prompt('Enter room name:', `${myName}'s Room`);
+    const defaultName = isPvpMode ? `${myName}'s Arena` : `${myName}'s Room`;
+    const roomName = prompt('Enter room name:', defaultName);
     if (roomName) {
-        socket.emit('createRoom', { playerName: myName, roomName: roomName });
+        socket.emit('createRoom', { playerName: myName, roomName: roomName, isPvp: isPvpMode });
     }
 });
 
