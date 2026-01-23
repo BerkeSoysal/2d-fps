@@ -2157,6 +2157,25 @@ function draw() {
         ctx.fillRect(0, 0, 2000, 1200);
     }
 
+    // Cover destroyed glass with floor
+    if (localGameState && localGameState.destroyedGlass && localGameState.destroyedGlass.length > 0) {
+        const glassPositions = GameLogic.glassTiles;
+        if (glassPositions) {
+            for (let i = 0; i < localGameState.destroyedGlass.length; i++) {
+                const glassId = localGameState.destroyedGlass[i];
+                for (let j = 0; j < glassPositions.length; j++) {
+                    if (glassPositions[j].id === glassId) {
+                        const glass = glassPositions[j];
+                        if (woodFloorImg && woodFloorImg.complete) {
+                            ctx.drawImage(woodFloorImg, glass.x, glass.y, glass.w, glass.h);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     // Draw Blood Splatters (fade out - faster on mobile for performance)
     const now = Date.now();
     const bloodFadeTime = isMobile ? 4000 : 8000; // 4 seconds on mobile, 8 on desktop
@@ -3085,6 +3104,9 @@ function startLocalGameLoop() {
                     isExplosion: true
                 });
             }
+        },
+        onGlassBreak: function(glass) {
+            playSound('glassBreak');
         }
     };
 
