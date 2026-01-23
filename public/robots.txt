@@ -1,0 +1,7 @@
+# Robots.txt for zombiegame.net
+
+User-agent: *
+Allow: /
+
+# Sitemap
+Sitemap: https://zombiegame.net/sitemap.xml

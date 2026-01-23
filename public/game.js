@@ -542,13 +542,14 @@ const mouse = {
 // Input Handling
 window.addEventListener('keydown', (e) => {
     if (!gameJoined || isChatting) return;
-    if (e.key === 'w') keys.w = true;
-    if (e.key === 'a') keys.a = true;
-    if (e.key === 's') keys.s = true;
-    if (e.key === 'd') keys.d = true;
+    const key = e.key.toLowerCase();
+    if (key === 'w') keys.w = true;
+    if (key === 'a') keys.a = true;
+    if (key === 's') keys.s = true;
+    if (key === 'd') keys.d = true;
 
     // R key for respawn in multiplayer
-    if (e.key === 'r' || e.key === 'R') {
+    if (key === 'r') {
         const myPlayer = players[socket.id];
         if (myPlayer && myPlayer.hp <= 0 && !isSinglePlayer && !isOfflineSinglePlayer) {
             socket.emit('restart');
@@ -557,10 +558,11 @@ window.addEventListener('keydown', (e) => {
 });
 
 window.addEventListener('keyup', (e) => {
-    if (e.key === 'w') keys.w = false;
-    if (e.key === 'a') keys.a = false;
-    if (e.key === 's') keys.s = false;
-    if (e.key === 'd') keys.d = false;
+    const key = e.key.toLowerCase();
+    if (key === 'w') keys.w = false;
+    if (key === 'a') keys.a = false;
+    if (key === 's') keys.s = false;
+    if (key === 'd') keys.d = false;
 });
 
 // ESC key for pause menu
